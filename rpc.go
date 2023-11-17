@@ -17,16 +17,17 @@ import (
 )
 
 const (
-	lenSeq         = 8
-	lenOneWay      = 1
-	lenMethod      = 2
-	lenIdentityLen = 2
-	lenErrCode     = 2
-	lenArg         = 4
-	lenReqHdr      = lenSeq + lenOneWay + lenMethod + lenIdentityLen
-	lenRspHdr      = lenSeq + lenErrCode
-	Actor_request  = 1
-	Actor_response = 2
+	lenSeq                 = 8
+	lenOneWay              = 1
+	lenMethod              = 2
+	lenIdentityLen         = 2
+	lenErrCode             = 2
+	lenArg                 = 4
+	lenReqHdr              = lenSeq + lenOneWay + lenMethod + lenIdentityLen
+	lenRspHdr              = lenSeq + lenErrCode
+	Actor_request          = 11311
+	Actor_response         = 11312
+	Actor_notify_not_exist = 11313
 )
 
 const (
@@ -36,6 +37,22 @@ const (
 	ErrGrainNotExist
 	ErrMethodNotExist
 )
+
+var errDesc []error = []error{
+	errors.New("Ok"),
+	errors.New("Method Panic"),
+	errors.New("Invaild Arg"),
+	errors.New("Grain Not Exist"),
+	errors.New("Method Not Exist"),
+}
+
+func getDescByErrCode(code uint16) error {
+	if int(code) < len(errDesc) {
+		return errDesc[code]
+	} else {
+		return errors.New("Unknow error")
+	}
+}
 
 type RequestMsg struct {
 	Seq    uint64
@@ -146,21 +163,24 @@ func (resp *ResponseMsg) Decode(buff []byte) error {
 ////server
 
 type Replyer struct {
-	seq     uint64
-	replyed int32
-	oneway  bool
-	from    addr.LogicAddr
+	seq      uint64
+	replyed  int32
+	oneway   bool
+	identity string
+	from     addr.LogicAddr
 }
 
 func (r *Replyer) Error(errCode int) {
-	if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+	if errCode == ErrGrainNotExist && r.oneway {
+		//通告对端identity不在当前节点
+		clustergo.SendBinMessage(r.from, []byte(r.identity), Actor_notify_not_exist)
+	} else if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
 		resp := &ResponseMsg{
 			Seq:     r.seq,
 			ErrCode: errCode,
 		}
-
 		if err := clustergo.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
-			clustergo.Log().Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
 }
@@ -172,13 +192,13 @@ func (r *Replyer) Reply(ret proto.Message) {
 		}
 
 		if b, err := proto.Marshal(ret); err != nil {
-			clustergo.Log().Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		} else {
 			resp.Ret = b
 		}
 
 		if err := clustergo.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
-			clustergo.Log().Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
 }
@@ -252,18 +272,18 @@ func (c *callContext) callOnResponse(resp []byte, err int) {
 	if atomic.CompareAndSwapInt32(&c.fired, 0, 1) {
 		if err == ErrOk {
 			if e := proto.Unmarshal(resp, c.respReceiver); e != nil {
-				clustergo.Log().Errorf("callOnResponse decode error:%v", e)
+				logger.Errorf("callOnResponse decode error:%v", e)
 				c.onResponse(nil, errors.New("invaild respReceiver"))
 			} else {
 				c.onResponse(c.respReceiver, nil)
 			}
 		} else {
-			c.onResponse(nil, nil)
+			c.onResponse(nil, getDescByErrCode(uint16(err)))
 		}
 	}
 }
 
-type Client struct {
+type rcpClient struct {
 	sync.Mutex
 	nextSequence uint32
 	timestamp    uint32
@@ -272,16 +292,11 @@ type Client struct {
 	pendingCall  [32]sync.Map
 }
 
-var gClient *Client = &Client{
-	timeOffset: uint32(time.Now().Unix() - time.Date(2023, time.January, 1, 0, 0, 0, 0, time.Local).Unix()),
-	startTime:  time.Now(),
-}
-
-func (c *Client) getTimeStamp() uint32 {
+func (c *rcpClient) getTimeStamp() uint32 {
 	return uint32(time.Since(c.startTime)/time.Second) + c.timeOffset
 }
 
-func (c *Client) makeSequence() (seq uint64) {
+func (c *rcpClient) makeSequence() (seq uint64) {
 	timestamp := c.getTimeStamp()
 	c.Lock()
 	if timestamp > c.timestamp {
@@ -293,57 +308,4 @@ func (c *Client) makeSequence() (seq uint64) {
 	seq = uint64(c.nextSequence)
 	c.Unlock()
 	return seq
-}
-
-func (c *Client) OnResponse(context context.Context, resp *ResponseMsg) {
-	if ctx, ok := c.pendingCall[int(resp.Seq)%len(c.pendingCall)].LoadAndDelete(resp.Seq); ok {
-		ctx.(*callContext).callOnResponse(resp.Ret, resp.ErrCode)
-	} else {
-		clustergo.Log().Infof("onResponse with no reqContext:%d", resp.Seq)
-	}
-}
-
-func (c *Client) Call(ctx context.Context, remoteAddr addr.LogicAddr, identity string, method uint16, arg proto.Message, ret proto.Message) error {
-	if b, err := proto.Marshal(arg); err != nil {
-		clustergo.Log().Panicf("encode error:%v", err)
-		return nil
-	} else {
-		reqMessage := &RequestMsg{
-			To:     identity,
-			Seq:    c.makeSequence(),
-			Method: method,
-			Arg:    b,
-		}
-		if ret != nil {
-			waitC := make(chan error, 1)
-			pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
-
-			pending.Store(reqMessage.Seq, &callContext{
-				respReceiver: ret,
-				onResponse: func(_ interface{}, err error) {
-					waitC <- err
-				},
-			})
-
-			clustergo.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
-
-			select {
-			case err := <-waitC:
-				return err
-			case <-ctx.Done():
-				pending.Delete(reqMessage.Seq)
-				switch ctx.Err() {
-				case context.Canceled:
-					return errors.New("canceled")
-				case context.DeadlineExceeded:
-					return errors.New("timeout")
-				default:
-					return errors.New("unknow")
-				}
-			}
-		} else {
-			reqMessage.Oneway = true
-			return clustergo.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
-		}
-	}
 }
