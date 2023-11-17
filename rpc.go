@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
@@ -23,14 +25,16 @@ const (
 	lenArg         = 4
 	lenReqHdr      = lenSeq + lenOneWay + lenMethod + lenIdentityLen
 	lenRspHdr      = lenSeq + lenErrCode
-	actor_request  = 1
-	actor_response = 2
+	Actor_request  = 1
+	Actor_response = 2
 )
 
 const (
 	ErrOk = iota
 	ErrPanic
 	ErrInvaildArg
+	ErrGrainNotExist
+	ErrMethodNotExist
 )
 
 type RequestMsg struct {
@@ -139,6 +143,8 @@ func (resp *ResponseMsg) Decode(buff []byte) error {
 	return nil
 }
 
+////server
+
 type Replyer struct {
 	seq     uint64
 	replyed int32
@@ -153,7 +159,7 @@ func (r *Replyer) Error(errCode int) {
 			ErrCode: errCode,
 		}
 
-		if err := clustergo.SendBinMessage(r.from, resp.Encode(), actor_response); err != nil {
+		if err := clustergo.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
 			clustergo.Log().Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
@@ -171,7 +177,7 @@ func (r *Replyer) Reply(ret proto.Message) {
 			resp.Ret = b
 		}
 
-		if err := clustergo.SendBinMessage(r.from, resp.Encode(), actor_response); err != nil {
+		if err := clustergo.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
 			clustergo.Log().Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
@@ -234,51 +240,110 @@ func (c *methodCaller) call(context context.Context, replyer *Replyer, req *Requ
 	}
 }
 
-//type Server struct {
-//	sync.RWMutex
+/////Client
 
-//methods map[string]*methodCaller
-//pause   int32
-//codec   Codec
-//}
+type callContext struct {
+	onResponse   func(interface{}, error)
+	fired        int32
+	respReceiver proto.Message
+}
 
-//func (s *Server) Register(, method interface{}) error {
-//	s.Lock()
-//	defer s.Unlock()
+func (c *callContext) callOnResponse(resp []byte, err int) {
+	if atomic.CompareAndSwapInt32(&c.fired, 0, 1) {
+		if err == ErrOk {
+			if e := proto.Unmarshal(resp, c.respReceiver); e != nil {
+				clustergo.Log().Errorf("callOnResponse decode error:%v", e)
+				c.onResponse(nil, errors.New("invaild respReceiver"))
+			} else {
+				c.onResponse(c.respReceiver, nil)
+			}
+		} else {
+			c.onResponse(nil, nil)
+		}
+	}
+}
 
-/*if name == "" {
-	return errors.New("RegisterMethod nams is nil")
-} else if caller, err := makeMethodCaller(name, method); err != nil {
-	return err
-} else {
-	if _, ok := s.methods[name]; ok {
-		return fmt.Errorf("duplicate method:%s", name)
+type Client struct {
+	sync.Mutex
+	nextSequence uint32
+	timestamp    uint32
+	timeOffset   uint32
+	startTime    time.Time
+	pendingCall  [32]sync.Map
+}
+
+var gClient *Client = &Client{
+	timeOffset: uint32(time.Now().Unix() - time.Date(2023, time.January, 1, 0, 0, 0, 0, time.Local).Unix()),
+	startTime:  time.Now(),
+}
+
+func (c *Client) getTimeStamp() uint32 {
+	return uint32(time.Since(c.startTime)/time.Second) + c.timeOffset
+}
+
+func (c *Client) makeSequence() (seq uint64) {
+	timestamp := c.getTimeStamp()
+	c.Lock()
+	if timestamp > c.timestamp {
+		c.timestamp = timestamp
+		c.nextSequence = 1
 	} else {
-		s.methods[name] = caller
+		c.nextSequence++
+	}
+	seq = uint64(c.nextSequence)
+	c.Unlock()
+	return seq
+}
+
+func (c *Client) OnResponse(context context.Context, resp *ResponseMsg) {
+	if ctx, ok := c.pendingCall[int(resp.Seq)%len(c.pendingCall)].LoadAndDelete(resp.Seq); ok {
+		ctx.(*callContext).callOnResponse(resp.Ret, resp.ErrCode)
+	} else {
+		clustergo.Log().Infof("onResponse with no reqContext:%d", resp.Seq)
+	}
+}
+
+func (c *Client) Call(ctx context.Context, remoteAddr addr.LogicAddr, identity string, method uint16, arg proto.Message, ret proto.Message) error {
+	if b, err := proto.Marshal(arg); err != nil {
+		clustergo.Log().Panicf("encode error:%v", err)
 		return nil
-	}
-}*/
-//}
-
-/*func (s *Server) UnRegister(name string) {
-	s.Lock()
-	defer s.Unlock()
-	delete(s.methods, name)
-}
-
-func (s *Server) method(name string) *methodCaller {
-	s.RLock()
-	defer s.RUnlock()
-	return s.methods[name]
-}
-
-func (s *Server) OnMessage(context context.Context, channel Channel, req *RequestMsg) {
-	replyer := &Replyer{channel: channel, seq: req.Seq, codec: s.codec, oneway: req.Oneway}
-	if caller := s.method(req.Method); caller == nil {
-		replyer.Error(NewError(ErrInvaildMethod, fmt.Sprintf("method %s not found", req.Method)))
-	} else if atomic.LoadInt32(&s.pause) == 1 {
-		replyer.Error(NewError(ErrServerPause, "server pause"))
 	} else {
-		caller.call(context, s.codec, replyer, req)
+		reqMessage := &RequestMsg{
+			To:     identity,
+			Seq:    c.makeSequence(),
+			Method: method,
+			Arg:    b,
+		}
+		if ret != nil {
+			waitC := make(chan error, 1)
+			pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
+
+			pending.Store(reqMessage.Seq, &callContext{
+				respReceiver: ret,
+				onResponse: func(_ interface{}, err error) {
+					waitC <- err
+				},
+			})
+
+			clustergo.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+
+			select {
+			case err := <-waitC:
+				return err
+			case <-ctx.Done():
+				pending.Delete(reqMessage.Seq)
+				switch ctx.Err() {
+				case context.Canceled:
+					return errors.New("canceled")
+				case context.DeadlineExceeded:
+					return errors.New("timeout")
+				default:
+					return errors.New("unknow")
+				}
+			}
+		} else {
+			reqMessage.Oneway = true
+			return clustergo.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+		}
 	}
-}*/
+}
