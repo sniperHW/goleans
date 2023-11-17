@@ -1,9 +1,9 @@
-package actorgo
+package goleans
 
 import (
-	"actorgo/pd"
 	"context"
 	"errors"
+	"goleans/pd"
 	"sync"
 	"time"
 
@@ -18,7 +18,7 @@ func InitLogger(l Logger) {
 	logger = l
 }
 
-type ActorGo struct {
+type Silo struct {
 	sync.RWMutex
 	grains          map[string]Grain
 	node            *clustergo.Node
@@ -26,8 +26,8 @@ type ActorGo struct {
 	placementDriver pd.PlacementDriver
 }
 
-func NewActorGo(placementDriver pd.PlacementDriver, node *clustergo.Node) *ActorGo {
-	return &ActorGo{
+func NewSilo(placementDriver pd.PlacementDriver, node *clustergo.Node) *Silo {
+	return &Silo{
 		grains:          map[string]Grain{},
 		node:            node,
 		placementDriver: placementDriver,
@@ -38,23 +38,23 @@ func NewActorGo(placementDriver pd.PlacementDriver, node *clustergo.Node) *Actor
 	}
 }
 
-func (a *ActorGo) OnActivate(identity string, grain Grain) {
-	a.Lock()
-	defer a.Unlock()
-	a.grains[identity] = grain
+func (s *Silo) OnActivate(identity string, grain Grain) {
+	s.Lock()
+	defer s.Unlock()
+	s.grains[identity] = grain
 }
 
-func (a *ActorGo) OnDeActivate(identity string) {
-	a.Lock()
-	defer a.Unlock()
-	delete(a.grains, identity)
+func (s *Silo) OnDeActivate(identity string) {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.grains, identity)
 }
 
-func (a *ActorGo) OnNotifyGrainNotExist(identity string) {
-	a.placementDriver.ClearPlacementInfo(identity)
+func (s *Silo) OnNotifyGrainNotExist(identity string) {
+	s.placementDriver.ClearPlacementInfo(identity)
 }
 
-func (a *ActorGo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *RequestMsg) {
+func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *RequestMsg) {
 	replyer := &Replyer{
 		seq:      req.Seq,
 		oneway:   req.Oneway,
@@ -62,9 +62,9 @@ func (a *ActorGo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Re
 		identity: req.To,
 	}
 
-	a.RLock()
-	grain, ok := a.grains[req.To]
-	a.RUnlock()
+	s.RLock()
+	grain, ok := s.grains[req.To]
+	s.RUnlock()
 	if !ok {
 		replyer.Error(ErrGrainNotExist)
 	} else if fn := grain.GetMethod(req.Method); fn != nil {
@@ -74,34 +74,34 @@ func (a *ActorGo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Re
 	}
 }
 
-func (a *ActorGo) OnRPCResponse(ctx context.Context, resp *ResponseMsg) {
-	if ctx, ok := a.rpcCli.pendingCall[int(resp.Seq)%len(a.rpcCli.pendingCall)].LoadAndDelete(resp.Seq); ok {
+func (s *Silo) OnRPCResponse(ctx context.Context, resp *ResponseMsg) {
+	if ctx, ok := s.rpcCli.pendingCall[int(resp.Seq)%len(s.rpcCli.pendingCall)].LoadAndDelete(resp.Seq); ok {
 		ctx.(*callContext).callOnResponse(resp.Ret, resp.ErrCode)
 	} else {
-		clustergo.Log().Infof("onResponse with no reqContext:%d", resp.Seq)
+		logger.Infof("onResponse with no reqContext:%d", resp.Seq)
 	}
 }
 
-func (a *ActorGo) Call(ctx context.Context, identity string, method uint16, arg proto.Message, ret proto.Message) error {
+func (s *Silo) Call(ctx context.Context, identity string, method uint16, arg proto.Message, ret proto.Message) error {
 	if b, err := proto.Marshal(arg); err != nil {
 		return err
 	} else {
 		reqMessage := &RequestMsg{
 			To:     identity,
-			Seq:    a.rpcCli.makeSequence(),
+			Seq:    s.rpcCli.makeSequence(),
 			Method: method,
 			Arg:    b,
 		}
 
 		for {
-			remoteAddr, err := a.placementDriver.GetHostService(ctx, identity)
+			remoteAddr, err := s.placementDriver.GetHostService(ctx, identity)
 			if err != nil {
 				return err
 			}
 
 			if ret != nil {
 				waitC := make(chan error, 1)
-				pending := &a.rpcCli.pendingCall[int(reqMessage.Seq)%len(a.rpcCli.pendingCall)]
+				pending := &s.rpcCli.pendingCall[int(reqMessage.Seq)%len(s.rpcCli.pendingCall)]
 
 				pending.Store(reqMessage.Seq, &callContext{
 					respReceiver: ret,
@@ -110,7 +110,7 @@ func (a *ActorGo) Call(ctx context.Context, identity string, method uint16, arg 
 					},
 				})
 
-				clustergo.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+				s.node.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
 
 				select {
 				case err := <-waitC:
@@ -118,7 +118,7 @@ func (a *ActorGo) Call(ctx context.Context, identity string, method uint16, arg 
 						return err
 					} else {
 						//err == ErrGrainNotExist
-						a.placementDriver.ClearPlacementInfo(identity)
+						s.placementDriver.ClearPlacementInfo(identity)
 						//continue
 					}
 				case <-ctx.Done():
@@ -134,7 +134,7 @@ func (a *ActorGo) Call(ctx context.Context, identity string, method uint16, arg 
 				}
 			} else {
 				reqMessage.Oneway = true
-				return clustergo.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+				return s.node.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
 			}
 		}
 	}

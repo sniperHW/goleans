@@ -1,4 +1,4 @@
-package actorgo
+package goleans
 
 type Grain interface {
 	GetIdentity() string

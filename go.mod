@@ -1,4 +1,4 @@
-module actorgo
+module goleans
 
 go 1.21.1
 

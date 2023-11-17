@@ -1,2 +1,2 @@
-# actorgo
-virtual actor for go
+# goleans
+virtual actor for go inspire by orleans

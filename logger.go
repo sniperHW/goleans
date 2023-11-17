@@ -1,4 +1,4 @@
-package actorgo
+package goleans
 
 type Logger interface {
 	Debugf(string, ...interface{})

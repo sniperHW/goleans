@@ -1,4 +1,4 @@
-package actorgo
+package goleans
 
 import (
 	"context"
