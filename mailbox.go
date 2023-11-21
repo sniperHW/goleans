@@ -40,15 +40,17 @@ type MailboxOption struct {
 	TaskQueueCap int //任务队列容量
 }
 
+var ErrMailBoxClosed error = errors.New("mailbox closed")
+
 func (m *Mailbox) PushTask(ctx context.Context, fn func()) error {
 	if m.closed == 1 {
-		return errors.New("mailbox closed")
+		return ErrMailBoxClosed
 	} else {
 		select {
 		case m.taskQueue <- fn:
 			return nil
 		case <-m.die:
-			return errors.New("mailbox closed")
+			return ErrMailBoxClosed
 		case <-ctx.Done():
 			return ctx.Err()
 		}

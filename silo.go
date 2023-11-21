@@ -20,38 +20,46 @@ func InitLogger(l Logger) {
 
 type Silo struct {
 	sync.RWMutex
-	grains          map[string]Grain
-	node            *clustergo.Node
-	rpcCli          *rcpClient
-	placementDriver pd.PlacementDriver
+	grains            map[string]*Grain
+	node              *clustergo.Node
+	rpcCli            *rcpClient
+	placementDriver   pd.PlacementDriver
+	userObjectFactory func(string) UserObject
+	startOnce         sync.Once
 }
 
-func NewSilo(placementDriver pd.PlacementDriver, node *clustergo.Node) *Silo {
-	return &Silo{
-		grains:          map[string]Grain{},
-		node:            node,
-		placementDriver: placementDriver,
-		rpcCli: &rcpClient{
-			timeOffset: uint32(time.Now().Unix() - time.Date(2023, time.January, 1, 0, 0, 0, 0, time.Local).Unix()),
-			startTime:  time.Now(),
-		},
+func NewSilo(placementDriver pd.PlacementDriver, node *clustergo.Node, userObjectFactory func(string) UserObject) (*Silo, error) {
+	if grains, err := placementDriver.Login(); err != nil {
+		return nil, err
+	} else {
+		s := &Silo{
+			grains:            map[string]*Grain{},
+			node:              node,
+			placementDriver:   placementDriver,
+			userObjectFactory: userObjectFactory,
+			rpcCli: &rcpClient{
+				timeOffset: uint32(time.Now().Unix() - time.Date(2023, time.January, 1, 0, 0, 0, 0, time.Local).Unix()),
+				startTime:  time.Now(),
+			},
+		}
+
+		for _, v := range grains {
+			s.grains[v] = newGrain(s, v)
+		}
+		return s, nil
 	}
 }
 
-func (s *Silo) OnActivate(identity string, grain Grain) {
+func (s *Silo) ActiveCallback(identity string) {
 	s.Lock()
-	defer s.Unlock()
-	s.grains[identity] = grain
-}
-
-func (s *Silo) OnDeActivate(identity string) {
-	s.Lock()
-	defer s.Unlock()
-	delete(s.grains, identity)
+	defer s.Lock()
+	if _, ok := s.grains[identity]; !ok {
+		s.grains[identity] = newGrain(s, identity)
+	}
 }
 
 func (s *Silo) OnNotifyGrainNotExist(identity string) {
-	s.placementDriver.ClearPlacementInfo(identity)
+	s.placementDriver.ClearPlacementCache(identity)
 }
 
 func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *RequestMsg) {
@@ -65,12 +73,37 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 	s.RLock()
 	grain, ok := s.grains[req.To]
 	s.RUnlock()
+
 	if !ok {
 		replyer.Error(ErrGrainNotExist)
-	} else if fn := grain.GetMethod(req.Method); fn != nil {
-		fn.call(ctx, replyer, req)
 	} else {
-		replyer.Error(ErrMethodNotExist)
+		var err error
+		object := grain.userObject.Load().(UserObject)
+		if object == emptyUserObject {
+			if object, err = grain.createUserObj(s); err != nil {
+				replyer.Error(ErrUserGrainCreateError)
+			}
+		}
+
+		if fn := grain.GetMethod(req.Method); fn != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			err = grain.AddTask(ctx, func() {
+				if object != grain.userObject.Load().(UserObject) {
+					//Init出错
+					replyer.Error(ErrUserGrainInitError)
+				} else {
+					fn.call(ctx, replyer, req)
+				}
+			})
+
+			if err == ErrMailBoxClosed {
+				replyer.Error(ErrMethodNotExist)
+			}
+			//AddTask超时不返回，让调用方超时
+		} else {
+			replyer.Error(ErrMethodNotExist)
+		}
 	}
 }
 
@@ -94,7 +127,7 @@ func (s *Silo) Call(ctx context.Context, identity string, method uint16, arg pro
 		}
 
 		for {
-			remoteAddr, err := s.placementDriver.GetHostService(ctx, identity)
+			remoteAddr, err := s.placementDriver.GetPlacement(ctx, identity)
 			if err != nil {
 				return err
 			}
@@ -118,7 +151,7 @@ func (s *Silo) Call(ctx context.Context, identity string, method uint16, arg pro
 						return err
 					} else {
 						//err == ErrGrainNotExist
-						s.placementDriver.ClearPlacementInfo(identity)
+						s.placementDriver.ClearPlacementCache(identity)
 						//continue
 					}
 				case <-ctx.Done():

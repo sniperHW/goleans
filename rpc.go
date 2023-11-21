@@ -36,6 +36,8 @@ const (
 	ErrInvaildArg
 	ErrGrainNotExist
 	ErrMethodNotExist
+	ErrUserGrainCreateError
+	ErrUserGrainInitError
 )
 
 var errDesc []error = []error{
@@ -44,6 +46,8 @@ var errDesc []error = []error{
 	errors.New("Invaild Arg"),
 	errors.New("Grain Not Exist"),
 	errors.New("Method Not Exist"),
+	errors.New("User Grain Create Error"),
+	errors.New("User Grain Init Error"),
 }
 
 func getDescByErrCode(code uint16) error {
