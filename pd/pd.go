@@ -6,8 +6,13 @@ import (
 	"github.com/sniperHW/clustergo/addr"
 )
 
+type Grain struct {
+	Identity string
+	Version  uint64 //一个全局递增版本号
+}
+
 type PlacementDriver interface {
-	Login(context.Context) ([]string, error)
+	Login(context.Context) ([]Grain, error)
 
 	//要求pd将Silo标记为不可分配
 	MarkUnAvaliable()
@@ -23,7 +28,7 @@ type PlacementDriver interface {
 	ClearPlacementCache(string)
 
 	//如果callback返回false表明Silo不能激活Grain(例如正在Stop)
-	SetActiveCallback(func(string) bool)
+	SetActiveCallback(func(Grain) bool)
 
-	Deactvie(context.Context, string) error
+	Deactvie(context.Context, Grain) error
 }

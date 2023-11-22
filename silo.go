@@ -41,7 +41,7 @@ func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clus
 		return nil, err
 	} else {
 		for _, v := range grains {
-			s.grains[v] = newGrain(s, v)
+			s.grains[v.Identity] = newGrain(s, v.Identity, v.Version)
 		}
 		return s, nil
 	}
@@ -50,12 +50,12 @@ func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clus
 func (s *Silo) removeGrain(grain *Grain) {
 	s.Lock()
 	defer s.Unlock()
-	if g, ok := s.grains[grain.Identity]; ok && g == grain {
+	if g, ok := s.grains[grain.Identity]; ok && g.version == grain.version {
 		delete(s.grains, grain.Identity)
 	}
 }
 
-func (s *Silo) activeCallback(identity string) bool {
+func (s *Silo) activeCallback(g pd.Grain) bool {
 	if s.stoped.Load() {
 		return false
 	}
@@ -63,11 +63,18 @@ func (s *Silo) activeCallback(identity string) bool {
 	s.Lock()
 	defer s.Unlock()
 
-	grain, ok := s.grains[identity]
-	if !ok || atomic.LoadInt32(&grain.deactived) == 1 {
-		s.grains[identity] = newGrain(s, identity)
+	grain, ok := s.grains[g.Identity]
+	if !ok {
+		s.grains[g.Identity] = newGrain(s, g.Identity, g.Version)
+	} else if grain.version == g.Version {
+		//消息重发
+		return true
+	} else if atomic.LoadInt32(&grain.deactived) == 1 {
+		s.grains[g.Identity] = newGrain(s, g.Identity, g.Version)
+	} else {
+		//pd正确的情况下不应该走到这里
+		atomic.StoreUint64(&grain.version, g.Version)
 	}
-
 	return true
 }
 

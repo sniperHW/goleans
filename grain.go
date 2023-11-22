@@ -2,6 +2,7 @@ package goleans
 
 import (
 	"context"
+	"goleans/pd"
 	"sync/atomic"
 	"time"
 )
@@ -17,6 +18,7 @@ var (
 type Grain struct {
 	mailbox     *Mailbox
 	Identity    string
+	version     uint64
 	methods     map[uint16]*methodCaller
 	userObject  UserObject
 	lastRequest atomic.Value
@@ -29,11 +31,12 @@ type UserObject interface {
 	Deactive() error
 }
 
-func newGrain(silo *Silo, identity string) *Grain {
+func newGrain(silo *Silo, identity string, version uint64) *Grain {
 	grain := &Grain{
 		silo:     silo,
 		Identity: identity,
 		methods:  map[uint16]*methodCaller{},
+		version:  version,
 		mailbox: &Mailbox{
 			taskQueue:  make(chan func(), GrainTaskQueueCap),
 			awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
@@ -83,10 +86,17 @@ func (grain *Grain) deactive(fn func()) {
 			 * pd选择在Silo:B激活Grain:1,此时，Grain:1同时在Silo:B,Silo:A存在。
 			 */
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-			err := grain.silo.placementDriver.Deactvie(ctx, grain.Identity)
+
+			/*
+			 *   假如此时，因为pd逻辑错误再次向Silo发送Active,将导致Silo创建新的Grain
+			 *   此时，将会使用老的version向pd请求Deactvie,正确的pd实现应该发现version不一致，所以不会实际执行Deactvie,
+			 *   但是需要向请求方返回成功，让旧的Grain消亡。
+			 */
+			err := grain.silo.placementDriver.Deactvie(ctx, pd.Grain{Identity: grain.Identity, Version: atomic.LoadUint64(&grain.version)})
 			cancel()
 			if err == nil {
 				go func() {
+					//如果发生了问题1，这里的remove将会失败，此时在pd上，当前silo不拥有grain,但是grain却没能从内存中销毁
 					grain.silo.removeGrain(grain)
 					grain.mailbox.Close()
 					if fn != nil {
