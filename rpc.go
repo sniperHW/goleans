@@ -181,13 +181,13 @@ type Replyer struct {
 func (r *Replyer) Error(errCode int) {
 	if errCode == ErrGrainNotExist && r.oneway {
 		//通告对端identity不在当前节点
-		r.node.SendBinMessage(r.from, []byte(r.identity), Actor_notify_not_exist)
+		r.node.SendBinMessage(r.from, Actor_notify_not_exist, []byte(r.identity))
 	} else if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
 		resp := &ResponseMsg{
 			Seq:     r.seq,
 			ErrCode: errCode,
 		}
-		if err := r.node.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
+		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
 			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
@@ -205,7 +205,7 @@ func (r *Replyer) Reply(ret proto.Message) {
 			resp.Ret = b
 		}
 
-		if err := r.node.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
+		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
 			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
@@ -365,7 +365,7 @@ func (c *RPCClient) Call(ctx context.Context, identity string, method uint16, ar
 					},
 				})
 
-				c.node.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+				c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
 
 				select {
 				case err := <-waitC:
@@ -389,7 +389,7 @@ func (c *RPCClient) Call(ctx context.Context, identity string, method uint16, ar
 				}
 			} else {
 				reqMessage.Oneway = true
-				return c.node.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+				return c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
 			}
 		}
 	}

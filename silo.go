@@ -25,7 +25,7 @@ type Silo struct {
 	startOnce         sync.Once
 }
 
-func NewSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, userObjectFactory func(string) UserObject) (*Silo, error) {
+func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, userObjectFactory func(string) UserObject) (*Silo, error) {
 	s := &Silo{
 		grains:            map[string]*Grain{},
 		node:              node,
@@ -93,7 +93,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 
 			if grain.deactive {
 				replyer.Error(ErrMethodNotExist)
-			} else if fn := grain.GetMethod(req.Method); fn != nil {
+			} else if fn := grain.methods[req.Method]; fn != nil {
 				fn.call(ctx, replyer, req)
 			} else {
 				replyer.Error(ErrMethodNotExist)

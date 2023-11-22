@@ -36,10 +36,6 @@ type Mailbox struct {
 	closeCh    chan struct{}
 }
 
-type MailboxOption struct {
-	TaskQueueCap int //任务队列容量
-}
-
 var ErrMailBoxClosed error = errors.New("mailbox closed")
 
 func (m *Mailbox) PushTask(ctx context.Context, fn func()) error {
@@ -57,13 +53,13 @@ func (m *Mailbox) PushTask(ctx context.Context, fn func()) error {
 	}
 }
 
-const mask int = 0xFFF
+var mask int = GoroutinePoolCap
 
 type goroutine_pool struct {
 	sync.Mutex
 	head int
 	tail int
-	pool [mask + 1]*goroutine
+	pool []*goroutine
 }
 
 func (p *goroutine_pool) put(g *goroutine) bool {
@@ -88,7 +84,9 @@ func (p *goroutine_pool) get() (g *goroutine) {
 	return g
 }
 
-var gotine_pool goroutine_pool = goroutine_pool{}
+var gotine_pool goroutine_pool = goroutine_pool{
+	pool: make([]*goroutine, mask+1),
+}
 
 func (m *Mailbox) onDie(co *goroutine) {
 	//处理taskQueue中剩余任务，等待awaitCount变成0

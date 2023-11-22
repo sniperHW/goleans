@@ -236,23 +236,92 @@ func init() {
 }
 
 func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
-	silo, _ := NewSilo(context.Background(), pdc, node, factory)
-	pdc.SetActiveCallback(silo.activeCallback)
-	node.OnBinaryMessage(func(from addr.LogicAddr, cmd uint16, msg []byte) {
-		switch cmd {
-		case Actor_request:
-			req := RequestMsg{}
-			if err := req.Decode(msg); err != nil {
-				logger.Error(err)
-			} else {
-				silo.OnRPCRequest(context.TODO(), from, &req)
-			}
-		case Actor_notify_not_exist:
-			pdc.ClearPlacementCache(string(msg))
-		default:
+	silo, _ := newSilo(context.Background(), pdc, node, factory)
+	//pdc.SetActiveCallback(silo.activeCallback)
+	node.RegisterBinrayHandler(Actor_request, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		req := RequestMsg{}
+		if err := req.Decode(msg); err != nil {
+			logger.Error(err)
+		} else {
+			silo.OnRPCRequest(context.TODO(), from, &req)
 		}
+	}).RegisterBinrayHandler(Actor_notify_not_exist, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		pdc.ClearPlacementCache(string(msg))
 	})
 	return silo
+}
+
+func TestGoleans(t *testing.T) {
+	localDiscovery := &localDiscovery{
+		nodes: map[addr.LogicAddr]*discovery.Node{},
+	}
+
+	node1Addr, _ := addr.MakeAddr("1.1.1", "localhost:28110")
+	node2Addr, _ := addr.MakeAddr("1.2.1", "localhost:28111")
+
+	localDiscovery.AddNode(&discovery.Node{
+		Addr:      node1Addr,
+		Available: true,
+	})
+
+	localDiscovery.AddNode(&discovery.Node{
+		Addr:      node2Addr,
+		Available: true,
+	})
+
+	pdServer := &placementDriver{
+		placement: map[string]*pdSilo{},
+	}
+
+	pdClient1 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[string]addr.LogicAddr{},
+		selfAddr:   node1Addr.LogicAddr(),
+	}
+
+	err := Start(localDiscovery, node1Addr.LogicAddr(), pdClient1, factory)
+	if err != nil {
+		panic(err)
+	}
+
+	node2 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	err = node2.Start(localDiscovery, node2Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	pdClient2 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[string]addr.LogicAddr{},
+		selfAddr:   node2Addr.LogicAddr(),
+	}
+
+	rpcClient := NewRPCClient(node2, pdClient2)
+
+	node2.RegisterBinrayHandler(Actor_response, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		resp := ResponseMsg{}
+		if err := resp.Decode(msg); err != nil {
+			logger.Error(err)
+		} else {
+			rpcClient.OnRPCResponse(context.TODO(), &resp)
+		}
+	}).RegisterBinrayHandler(Actor_notify_not_exist, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		pdClient2.ClearPlacementCache(string(msg))
+	})
+
+	var resp echo.Response
+	err = rpcClient.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello",
+	}, &resp)
+
+	fmt.Println(err, &resp)
+	node2.Stop()
+
+	err = Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello2",
+	}, &resp)
+
+	fmt.Println(err, &resp)
+
+	Stop()
 }
 
 func TestGrain(t *testing.T) {
@@ -301,19 +370,15 @@ func TestGrain(t *testing.T) {
 
 	rpcClient := NewRPCClient(node2, pdClient2)
 
-	node2.OnBinaryMessage(func(from addr.LogicAddr, cmd uint16, msg []byte) {
-		switch cmd {
-		case Actor_response:
-			resp := ResponseMsg{}
-			if err := resp.Decode(msg); err != nil {
-				logger.Error(err)
-			} else {
-				rpcClient.OnRPCResponse(context.TODO(), &resp)
-			}
-		case Actor_notify_not_exist:
-			pdClient2.ClearPlacementCache(string(msg))
-		default:
+	node2.RegisterBinrayHandler(Actor_response, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		resp := ResponseMsg{}
+		if err := resp.Decode(msg); err != nil {
+			logger.Error(err)
+		} else {
+			rpcClient.OnRPCResponse(context.TODO(), &resp)
 		}
+	}).RegisterBinrayHandler(Actor_notify_not_exist, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		pdClient2.ClearPlacementCache(string(msg))
 	})
 
 	var resp echo.Response
