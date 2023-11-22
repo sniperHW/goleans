@@ -7,7 +7,7 @@ import (
 )
 
 type PlacementDriver interface {
-	Login() ([]string, error)
+	Login(context.Context) ([]string, error)
 	/*
 	 *获取identidy所在节点地址,ctx,identity
 	 */
@@ -20,5 +20,5 @@ type PlacementDriver interface {
 
 	SetActiveCallback(func(string))
 
-	Deactvie(context.Context) error
+	Deactvie(context.Context, string) error
 }

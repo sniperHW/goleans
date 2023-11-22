@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"goleans/pd"
 	"reflect"
 	"runtime"
 	"sync"
@@ -32,7 +33,7 @@ const (
 
 const (
 	ErrOk = iota
-	ErrPanic
+	ErrMethodCallPanic
 	ErrInvaildArg
 	ErrGrainNotExist
 	ErrMethodNotExist
@@ -42,7 +43,7 @@ const (
 
 var errDesc []error = []error{
 	errors.New("Ok"),
-	errors.New("Method Panic"),
+	errors.New("Method call Panic"),
 	errors.New("Invaild Arg"),
 	errors.New("Grain Not Exist"),
 	errors.New("Method Not Exist"),
@@ -82,9 +83,9 @@ func (req *RequestMsg) Encode() []byte {
 		buff[8] = byte(1)
 	}
 
-	binary.BigEndian.PutUint16(buff, req.Method)
+	binary.BigEndian.PutUint16(buff[9:], req.Method)
 
-	binary.BigEndian.PutUint16(buff, uint16(len(req.To)))
+	binary.BigEndian.PutUint16(buff[11:], uint16(len(req.To)))
 
 	buff = append(buff, []byte(req.To)...)
 
@@ -100,6 +101,7 @@ func (req *RequestMsg) Decode(buff []byte) error {
 		return errors.New("invaild request packet")
 	}
 	req.Seq = binary.BigEndian.Uint64(buff[r:])
+
 	r += lenSeq
 	if buffLen-r < lenOneWay {
 		return errors.New("invaild request packet")
@@ -117,8 +119,9 @@ func (req *RequestMsg) Decode(buff []byte) error {
 	if buffLen-r < lenIdentityLen {
 		return errors.New("invaild request packet")
 	}
-	r += lenIdentityLen
 	lenIdentity := int(binary.BigEndian.Uint16(buff[r:]))
+	r += lenIdentityLen
+
 	if buffLen-r < lenIdentity {
 		return errors.New("invaild request packet")
 	}
@@ -136,7 +139,7 @@ func (req *RequestMsg) Decode(buff []byte) error {
 func (resp *ResponseMsg) Encode() (buff []byte) {
 	buff = make([]byte, 10, lenRspHdr+len(resp.Ret))
 	binary.BigEndian.PutUint64(buff, resp.Seq)
-	binary.BigEndian.PutUint16(buff, uint16(resp.ErrCode))
+	binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
 	buff = append(buff, resp.Ret...)
 	return buff
 }
@@ -172,18 +175,19 @@ type Replyer struct {
 	oneway   bool
 	identity string
 	from     addr.LogicAddr
+	node     *clustergo.Node
 }
 
 func (r *Replyer) Error(errCode int) {
 	if errCode == ErrGrainNotExist && r.oneway {
 		//通告对端identity不在当前节点
-		clustergo.SendBinMessage(r.from, []byte(r.identity), Actor_notify_not_exist)
+		r.node.SendBinMessage(r.from, []byte(r.identity), Actor_notify_not_exist)
 	} else if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
 		resp := &ResponseMsg{
 			Seq:     r.seq,
 			ErrCode: errCode,
 		}
-		if err := clustergo.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
+		if err := r.node.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
 			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
@@ -201,7 +205,7 @@ func (r *Replyer) Reply(ret proto.Message) {
 			resp.Ret = b
 		}
 
-		if err := clustergo.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
+		if err := r.node.SendBinMessage(r.from, resp.Encode(), Actor_response); err != nil {
 			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
 		}
 	}
@@ -254,8 +258,8 @@ func (c *methodCaller) call(context context.Context, replyer *Replyer, req *Requ
 			if r := recover(); r != nil {
 				buf := make([]byte, 65535)
 				l := runtime.Stack(buf, false)
-				clustergo.Log().Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
-				replyer.Error(ErrPanic)
+				logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
+				replyer.Error(ErrMethodCallPanic)
 			}
 		}()
 		c.fn.Call([]reflect.Value{reflect.ValueOf(context), reflect.ValueOf(replyer), reflect.ValueOf(arg)})
@@ -287,20 +291,31 @@ func (c *callContext) callOnResponse(resp []byte, err int) {
 	}
 }
 
-type rcpClient struct {
+type RPCClient struct {
 	sync.Mutex
-	nextSequence uint32
-	timestamp    uint32
-	timeOffset   uint32
-	startTime    time.Time
-	pendingCall  [32]sync.Map
+	nextSequence    uint32
+	timestamp       uint32
+	timeOffset      uint32
+	startTime       time.Time
+	pendingCall     [32]sync.Map
+	node            *clustergo.Node
+	placementDriver pd.PlacementDriver
 }
 
-func (c *rcpClient) getTimeStamp() uint32 {
+func NewRPCClient(node *clustergo.Node, placementDriver pd.PlacementDriver) *RPCClient {
+	return &RPCClient{
+		timeOffset:      uint32(time.Now().Unix() - time.Date(2023, time.January, 1, 0, 0, 0, 0, time.Local).Unix()),
+		startTime:       time.Now(),
+		node:            node,
+		placementDriver: placementDriver,
+	}
+}
+
+func (c *RPCClient) getTimeStamp() uint32 {
 	return uint32(time.Since(c.startTime)/time.Second) + c.timeOffset
 }
 
-func (c *rcpClient) makeSequence() (seq uint64) {
+func (c *RPCClient) makeSequence() (seq uint64) {
 	timestamp := c.getTimeStamp()
 	c.Lock()
 	if timestamp > c.timestamp {
@@ -312,4 +327,70 @@ func (c *rcpClient) makeSequence() (seq uint64) {
 	seq = uint64(c.nextSequence)
 	c.Unlock()
 	return seq
+}
+
+func (c *RPCClient) OnRPCResponse(ctx context.Context, resp *ResponseMsg) {
+	if ctx, ok := c.pendingCall[int(resp.Seq)%len(c.pendingCall)].LoadAndDelete(resp.Seq); ok {
+		ctx.(*callContext).callOnResponse(resp.Ret, resp.ErrCode)
+	} else {
+		logger.Infof("onResponse with no reqContext:%d", resp.Seq)
+	}
+}
+
+func (c *RPCClient) Call(ctx context.Context, identity string, method uint16, arg proto.Message, ret proto.Message) error {
+	if b, err := proto.Marshal(arg); err != nil {
+		return err
+	} else {
+		reqMessage := &RequestMsg{
+			To:     identity,
+			Seq:    c.makeSequence(),
+			Method: method,
+			Arg:    b,
+		}
+
+		for {
+			remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
+			if err != nil {
+				return err
+			}
+
+			if ret != nil {
+				waitC := make(chan error, 1)
+				pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
+
+				pending.Store(reqMessage.Seq, &callContext{
+					respReceiver: ret,
+					onResponse: func(_ interface{}, err error) {
+						waitC <- err
+					},
+				})
+
+				c.node.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+
+				select {
+				case err := <-waitC:
+					if err == nil || err != getDescByErrCode(ErrGrainNotExist) {
+						return err
+					} else {
+						//err == ErrGrainNotExist
+						c.placementDriver.ClearPlacementCache(identity)
+						//continue
+					}
+				case <-ctx.Done():
+					pending.Delete(reqMessage.Seq)
+					switch ctx.Err() {
+					case context.Canceled:
+						return errors.New("canceled")
+					case context.DeadlineExceeded:
+						return errors.New("timeout")
+					default:
+						return errors.New("unknow")
+					}
+				}
+			} else {
+				reqMessage.Oneway = true
+				return c.node.SendBinMessage(remoteAddr, reqMessage.Encode(), Actor_request)
+			}
+		}
+	}
 }
