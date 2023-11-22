@@ -76,7 +76,7 @@ func (d *localDiscovery) Close() {
 type pdSilo struct {
 	logicAddr      addr.LogicAddr
 	grains         map[string]struct{}
-	activeCallback func(identity string)
+	activeCallback func(identity string) bool
 }
 
 type placementDriver struct {
@@ -128,9 +128,10 @@ func (pd *placementDriver) GetPlacement(pdc *placementDriverClient, identity str
 		silo := pd.silos[i]
 		if silo.logicAddr != pdc.selfAddr {
 			pd.nextSilo = (i + 1) % len(pd.silos)
-			silo.activeCallback(identity)
-			silo.grains[identity] = struct{}{}
-			return silo.logicAddr, nil
+			if silo.activeCallback(identity) {
+				silo.grains[identity] = struct{}{}
+				return silo.logicAddr, nil
+			}
 		} else {
 			i = (i + 1) % len(pd.silos)
 			if i == pd.nextSilo {
@@ -155,7 +156,7 @@ type placementDriverClient struct {
 	driver         *placementDriver
 	localCache     map[string]addr.LogicAddr
 	selfAddr       addr.LogicAddr
-	activeCallback func(identity string)
+	activeCallback func(identity string) bool
 }
 
 func (pdc *placementDriverClient) Login(ctx context.Context) (grains []string, err error) {
@@ -183,18 +184,25 @@ func (pdc *placementDriverClient) GetPlacement(ctx context.Context, identity str
 	}
 }
 
-func (pdc *placementDriverClient) SetActiveCallback(cb func(string)) {
-	pdc.activeCallback = func(identity string) {
+func (pdc *placementDriverClient) SetActiveCallback(cb func(string) bool) {
+	pdc.activeCallback = func(identity string) bool {
+		if !cb(identity) {
+			return false
+		}
 		pdc.Lock()
 		pdc.localCache[identity] = pdc.selfAddr
 		pdc.Unlock()
-		cb(identity)
+		return true
 	}
 }
 
 func (pdc *placementDriverClient) Deactvie(ctx context.Context, identity string) error {
 	pdc.driver.Deactvie(pdc.selfAddr, identity)
 	return nil
+}
+
+func (pdc *placementDriverClient) MarkUnAvaliable() {
+
 }
 
 func (pdc *placementDriverClient) ClearPlacementCache(identity string) {

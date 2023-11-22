@@ -21,7 +21,7 @@ type Grain struct {
 	userObject  UserObject
 	lastRequest atomic.Value
 	silo        *Silo
-	deactive    bool
+	deactived   int32
 }
 
 type UserObject interface {
@@ -70,6 +70,40 @@ func (grain *Grain) RegisterMethod(method uint16, fn interface{}) error {
 	}
 }
 
+func (grain *Grain) deactive(fn func()) {
+	if atomic.CompareAndSwapInt32(&grain.deactived, 0, 1) { //grain.deactived.CompareAndSwap(false, true) {
+		// 空闲超过5分钟，执行deactive
+		for {
+			/*
+			 * 只会返回超时错误，为了避免发生Grain在两个Silo被激活的情况发生，这里必须等到pd返回执行成功
+			 *
+			 * 考虑一下情形:
+			 * Silo:A向pd发送Grain:1 Deactvie，Silo成功执行，之后Silo:A跟pd发生网络分区，Silo:A无法收到pd的响应。
+			 * 最终Silo:A将超时，如果此时退出Deactvie,等待下一次tick再尝试，那么在这个时间段内，pd再次收到Grain:1的请求,
+			 * pd选择在Silo:B激活Grain:1,此时，Grain:1同时在Silo:B,Silo:A存在。
+			 */
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			err := grain.silo.placementDriver.Deactvie(ctx, grain.Identity)
+			cancel()
+			if err == nil {
+				break
+			} else {
+				logger.Errorf("Deactvie error:%v", err)
+			}
+		}
+
+		go func() {
+			grain.silo.Lock()
+			delete(grain.silo.grains, grain.Identity)
+			grain.silo.Unlock()
+			grain.mailbox.Close()
+			if fn != nil {
+				fn()
+			}
+		}()
+	}
+}
+
 func (grain *Grain) tick() {
 	now := time.Now()
 	lastRequest := grain.lastRequest.Load().(time.Time)
@@ -80,33 +114,7 @@ func (grain *Grain) tick() {
 				grain.mailbox.PushTask(context.TODO(), grain.tick)
 			})
 		} else {
-			//空闲超过5分钟，执行deactive
-			for {
-				/*
-				 * 只会返回超时错误，为了避免发生Grain在两个Silo被激活的情况发生，这里必须等到pd返回执行成功
-				 *
-				 * 考虑一下情形:
-				 * Silo:A向pd发送Grain:1 Deactvie，Silo成功执行，之后Silo:A跟pd发生网络分区，Silo:A无法收到pd的响应。
-				 * 最终Silo:A将超时，如果此时退出Deactvie,等待下一次tick再尝试，那么在这个时间段内，pd再次收到Grain:1的请求,
-				 * pd选择在Silo:B激活Grain:1,此时，Grain:1同时在Silo:B,Silo:A存在。
-				 */
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-				err := grain.silo.placementDriver.Deactvie(ctx, grain.Identity)
-				cancel()
-				if err == nil {
-					grain.deactive = true
-					grain.silo.Lock()
-					delete(grain.silo.grains, grain.Identity)
-					grain.silo.Unlock()
-					break
-				} else {
-					logger.Errorf("Deactvie error:%v", err)
-				}
-			}
-
-			go func() {
-				grain.mailbox.Close()
-			}()
+			grain.deactive(nil)
 			return
 		}
 	}

@@ -8,6 +8,10 @@ import (
 
 type PlacementDriver interface {
 	Login(context.Context) ([]string, error)
+
+	//要求pd将Silo标记为不可分配
+	MarkUnAvaliable()
+
 	/*
 	 *获取identidy所在节点地址,ctx,identity
 	 */
@@ -18,7 +22,8 @@ type PlacementDriver interface {
 	 */
 	ClearPlacementCache(string)
 
-	SetActiveCallback(func(string))
+	//如果callback返回false表明Silo不能激活Grain(例如正在Stop)
+	SetActiveCallback(func(string) bool)
 
 	Deactvie(context.Context, string) error
 }

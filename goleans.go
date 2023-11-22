@@ -75,6 +75,7 @@ func Call(ctx context.Context, identity string, method uint16, arg proto.Message
 
 func Stop() {
 	if started.Load() {
+		silo.Stop()
 		clustergo.Stop()
 	}
 }

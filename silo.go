@@ -4,6 +4,7 @@ import (
 	"context"
 	"goleans/pd"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sniperHW/clustergo"
@@ -23,6 +24,7 @@ type Silo struct {
 	placementDriver   pd.PlacementDriver
 	userObjectFactory func(string) UserObject
 	startOnce         sync.Once
+	stoped            atomic.Bool
 }
 
 func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, userObjectFactory func(string) UserObject) (*Silo, error) {
@@ -45,13 +47,20 @@ func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clus
 	}
 }
 
-func (s *Silo) activeCallback(identity string) {
+func (s *Silo) activeCallback(identity string) bool {
+	if s.stoped.Load() {
+		return false
+	}
+
 	s.Lock()
 	defer s.Unlock()
-	grain, ok := s.grains[identity]
-	if !ok || grain.deactive {
+
+	_, ok := s.grains[identity]
+	if !ok {
 		s.grains[identity] = newGrain(s, identity)
 	}
+
+	return true
 }
 
 func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *RequestMsg) {
@@ -91,7 +100,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 				grain.userObject = userObj
 			}
 
-			if grain.deactive {
+			if grain.deactived == 1 {
 				replyer.Error(ErrMethodNotExist)
 			} else if fn := grain.methods[req.Method]; fn != nil {
 				fn.call(ctx, replyer, req)
@@ -107,5 +116,20 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 }
 
 func (s *Silo) Stop() {
-
+	if s.stoped.CompareAndSwap(false, true) {
+		s.placementDriver.MarkUnAvaliable()
+		//Grain Deactive
+		var wait sync.WaitGroup
+		s.Lock()
+		for _, v := range s.grains {
+			wait.Add(1)
+			if v.mailbox.PushTask(context.TODO(), func() {
+				v.deactive(wait.Done)
+			}) != nil {
+				wait.Done()
+			}
+		}
+		s.Unlock()
+		wait.Wait()
+	}
 }
