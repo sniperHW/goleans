@@ -47,6 +47,14 @@ func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clus
 	}
 }
 
+func (s *Silo) removeGrain(grain *Grain) {
+	s.Lock()
+	defer s.Unlock()
+	if g, ok := s.grains[grain.Identity]; ok && g == grain {
+		delete(s.grains, grain.Identity)
+	}
+}
+
 func (s *Silo) activeCallback(identity string) bool {
 	if s.stoped.Load() {
 		return false
@@ -55,8 +63,8 @@ func (s *Silo) activeCallback(identity string) bool {
 	s.Lock()
 	defer s.Unlock()
 
-	_, ok := s.grains[identity]
-	if !ok {
+	grain, ok := s.grains[identity]
+	if !ok || atomic.LoadInt32(&grain.deactived) == 1 {
 		s.grains[identity] = newGrain(s, identity)
 	}
 

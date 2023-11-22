@@ -86,21 +86,18 @@ func (grain *Grain) deactive(fn func()) {
 			err := grain.silo.placementDriver.Deactvie(ctx, grain.Identity)
 			cancel()
 			if err == nil {
-				break
+				go func() {
+					grain.silo.removeGrain(grain)
+					grain.mailbox.Close()
+					if fn != nil {
+						fn()
+					}
+				}()
+				return
 			} else {
 				logger.Errorf("Deactvie error:%v", err)
 			}
 		}
-
-		go func() {
-			grain.silo.Lock()
-			delete(grain.silo.grains, grain.Identity)
-			grain.silo.Unlock()
-			grain.mailbox.Close()
-			if fn != nil {
-				fn()
-			}
-		}()
 	}
 }
 

@@ -142,6 +142,7 @@ func (pd *placementDriver) GetPlacement(pdc *placementDriverClient, identity str
 }
 
 func (pd *placementDriver) Deactvie(siloAddr addr.LogicAddr, identity string) {
+	fmt.Println("Deactvie")
 	pd.Lock()
 	defer pd.Unlock()
 	silo, ok := pd.placement[identity]
