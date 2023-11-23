@@ -14,6 +14,7 @@ import (
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
+	"github.com/sniperHW/netgo"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -43,21 +44,21 @@ const (
 )
 
 var errDesc []error = []error{
-	errors.New("Ok"),
-	errors.New("Method call Panic"),
-	errors.New("Invaild Arg"),
-	errors.New("Method Not Exist"),
-	errors.New("User Grain Create Error"),
-	errors.New("User Grain Init Error"),
-	errors.New("Placement Redirect"),
-	errors.New("Retry"),
+	errors.New("ok"),
+	errors.New("method call Panic"),
+	errors.New("invaild Arg"),
+	errors.New("method Not Exist"),
+	errors.New("user Grain Create Error"),
+	errors.New("user Grain Init Error"),
+	errors.New("placement Redirect"),
+	errors.New("retry"),
 }
 
 func getDescByErrCode(code uint16) error {
 	if int(code) < len(errDesc) {
 		return errDesc[code]
 	} else {
-		return errors.New("Unknow error")
+		return errors.New("unknow error")
 	}
 }
 
@@ -141,7 +142,7 @@ func (req *RequestMsg) Decode(buff []byte) error {
 
 func (resp *ResponseMsg) Encode() (buff []byte) {
 	if resp.ErrCode == ErrRedirect {
-		buff = make([]byte, lenRspHdr+4, lenRspHdr+4)
+		buff = make([]byte, lenRspHdr+4)
 		binary.BigEndian.PutUint64(buff, resp.Seq)
 		binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
 		binary.BigEndian.PutUint32(buff[10:], uint32(resp.RedirectAddr))
@@ -382,41 +383,77 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 			Arg:    b,
 		}
 
-		for {
+		if ret == nil {
 			remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
 			if err != nil {
 				return err
 			}
+			reqMessage.Oneway = true
+			err = c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
+			if err == clustergo.ErrInvaildNode {
+				c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+			}
+			return err
+		} else {
+			pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
+			callCtx := &callContext{
+				respReceiver: ret,
+				respC:        make(chan error),
+			}
+			pending.Store(reqMessage.Seq, callCtx)
 
-			if ret != nil {
-				pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
+			req := reqMessage.Encode()
 
-				callCtx := &callContext{
-					respReceiver: ret,
-					respC:        make(chan error),
+			for {
+				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
+				if err != nil {
+					pending.Delete(reqMessage.Seq)
+					return err
 				}
 
-				pending.Store(reqMessage.Seq, callCtx)
+				err = c.node.SendBinMessage(remoteAddr, Actor_request, req)
 
-				err = c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
-
-				select {
-				case err := <-callCtx.respC:
-					switch err := err.(type) {
-					case pd.ErrorRedirect:
-						c.placementDriver.ResetPlacementCache(identity, err.Addr)
-						if err.Addr.Empty() {
-							time.Sleep(time.Millisecond * 100)
+				if err == nil {
+					//发送成功，等待响应
+					select {
+					case err := <-callCtx.respC:
+						switch err := err.(type) {
+						case pd.ErrorRedirect:
+							c.placementDriver.ResetPlacementCache(identity, err.Addr)
+							if err.Addr.Empty() {
+								time.Sleep(time.Millisecond * 100)
+							}
+						case error:
+							if err == getDescByErrCode(ErrRetryAgain) {
+								time.Sleep(time.Millisecond * 100)
+							} else {
+								return err
+							}
+						default:
+							return nil
 						}
-					case error:
-						if err == getDescByErrCode(ErrRetryAgain) {
-							time.Sleep(time.Millisecond * 100)
-						} else {
-							return err
+					case <-ctx.Done():
+						pending.Delete(reqMessage.Seq)
+						switch ctx.Err() {
+						case context.Canceled:
+							return errors.New("canceled")
+						case context.DeadlineExceeded:
+							c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+							return errors.New("timeout")
+						default:
+							return errors.New("unknow")
 						}
-					default:
-						return nil
 					}
+				} else if err == clustergo.ErrInvaildNode {
+					//对端地址已经失效，清除本地缓存，再次重试
+					c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+				} else if err != netgo.ErrSendTimeout {
+					pending.Delete(reqMessage.Seq)
+					return err
+				}
+
+				//检查是否可以执行重试
+				select {
 				case <-ctx.Done():
 					pending.Delete(reqMessage.Seq)
 					switch ctx.Err() {
@@ -428,14 +465,8 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					default:
 						return errors.New("unknow")
 					}
+				default:
 				}
-			} else {
-				reqMessage.Oneway = true
-				err := c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
-				if err == clustergo.ErrInvaildNode {
-					c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
-				}
-				return err
 			}
 		}
 	}
