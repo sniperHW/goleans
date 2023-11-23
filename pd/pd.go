@@ -6,29 +6,41 @@ import (
 	"github.com/sniperHW/clustergo/addr"
 )
 
-type Grain struct {
-	Identity string
-	Version  uint64 //一个全局递增版本号
+type Metric struct {
+	GrainCount int
+	Memory     float32
+	CPU        float32
+}
+
+type GrainIdentity string
+
+type ErrorRedirect struct {
+	Addr addr.LogicAddr
+}
+
+func (e ErrorRedirect) Error() string {
+	return "redirect"
 }
 
 type PlacementDriver interface {
-	Login(context.Context) ([]Grain, error)
+	SetGetMetric(func() Metric)
+
+	Login(context.Context) error
+
+	Logout(context.Context) error
 
 	//要求pd将Silo标记为不可分配
 	MarkUnAvaliable()
 
-	/*
-	 *获取identidy所在节点地址,ctx,identity
-	 */
-	GetPlacement(context.Context, string) (addr.LogicAddr, error)
+	GetPlacement(context.Context, GrainIdentity) (addr.LogicAddr, error)
+
+	ResetPlacementCache(GrainIdentity, addr.LogicAddr)
+
+	Deactivate(context.Context, GrainIdentity) error
 
 	/*
-	 * 清理identity的placement信息，收到对端返回actor不存在错误之后调用
+	 *  尝试请求pd将GrainIdentity的地址锁定为请求Silo的地址
+	 *  如果GrainIdentity已经被其它Silo锁定，将返回ErrorRedirect,Addr字段含有重定向地址
 	 */
-	ClearPlacementCache(string)
-
-	//如果callback返回false表明Silo不能激活Grain(例如正在Stop)
-	SetActiveCallback(func(Grain) bool)
-
-	Deactvie(context.Context, Grain) error
+	Activate(context.Context, GrainIdentity) error
 }

@@ -2,7 +2,7 @@ package goleans
 
 import (
 	"context"
-	"errors"
+	"encoding/binary"
 	"fmt"
 	"goleans/pd"
 	"goleans/testproto/echo"
@@ -75,45 +75,41 @@ func (d *localDiscovery) Close() {
 }
 
 type pdSilo struct {
-	logicAddr      addr.LogicAddr
-	grains         map[string]pd.Grain
-	activeCallback func(pd.Grain) bool
+	logicAddr addr.LogicAddr
+	grains    map[pd.GrainIdentity]struct{}
+	metrics   pd.Metric
 }
 
 type placementDriver struct {
 	sync.Mutex
-	placement map[string]*pdSilo
+	placement map[pd.GrainIdentity]*pdSilo
 	silos     []*pdSilo
 	nextSilo  int
-	version   uint64
 }
 
-func (p *placementDriver) Login(pdc *placementDriverClient) (grains []pd.Grain) {
+func (p *placementDriver) Login(siloAddr addr.LogicAddr, metric pd.Metric) {
 	p.Lock()
 	defer p.Unlock()
+
 	var s *pdSilo
-	for _, v := range pdc.driver.silos {
-		if v.logicAddr == pdc.selfAddr {
+	for _, v := range p.silos {
+		if v.logicAddr == siloAddr {
 			s = v
 		}
 	}
 
 	if s == nil {
 		s = &pdSilo{
-			logicAddr:      pdc.selfAddr,
-			grains:         map[string]pd.Grain{},
-			activeCallback: pdc.activeCallback,
+			logicAddr: siloAddr,
+			grains:    map[pd.GrainIdentity]struct{}{},
 		}
 		p.silos = append(p.silos, s)
 	}
 
-	for _, v := range s.grains {
-		grains = append(grains, v)
-	}
-	return grains
+	s.metrics = metric
 }
 
-func (p *placementDriver) GetPlacement(pdc *placementDriverClient, identity string) (addr.LogicAddr, error) {
+func (p *placementDriver) GetPlacement(selfAddr addr.LogicAddr, identity pd.GrainIdentity) (addr.LogicAddr, error) {
 	p.Lock()
 	defer p.Unlock()
 	silo, ok := p.placement[identity]
@@ -122,72 +118,75 @@ func (p *placementDriver) GetPlacement(pdc *placementDriverClient, identity stri
 	}
 
 	if len(p.silos) == 0 {
-		return addr.LogicAddr(0), errors.New("no silo")
+		return addr.LogicAddr(0), fmt.Errorf("no avaliable silo to activate grain:%v", identity)
 	}
 
 	i := p.nextSilo
 	for {
 		silo := p.silos[i]
-		if silo.logicAddr != pdc.selfAddr {
+		if silo.logicAddr != selfAddr {
 			p.nextSilo = (i + 1) % len(p.silos)
-			p.version++
-			grain := pd.Grain{
-				Identity: identity,
-				Version:  p.version,
-			}
-
-			if silo.activeCallback(grain) {
-				silo.grains[identity] = grain
-				return silo.logicAddr, nil
-			}
+			return silo.logicAddr, nil
 		} else {
 			i = (i + 1) % len(p.silos)
 			if i == p.nextSilo {
-				return addr.LogicAddr(0), errors.New("no silo")
+				return addr.LogicAddr(0), fmt.Errorf("no avaliable silo to activate grain:%v", identity)
 			}
 		}
 	}
 }
 
-func (pd *placementDriver) Deactvie(siloAddr addr.LogicAddr, grain pd.Grain) {
-	fmt.Println("Deactvie")
-	pd.Lock()
-	defer pd.Unlock()
-	silo, ok := pd.placement[grain.Identity]
+func (p *placementDriver) Deactivate(siloAddr addr.LogicAddr, identity pd.GrainIdentity) {
+	p.Lock()
+	defer p.Unlock()
+	silo, ok := p.placement[identity]
 	if ok && silo.logicAddr == siloAddr {
-		if g, ok := silo.grains[grain.Identity]; ok && g.Identity == grain.Identity {
-			delete(silo.grains, grain.Identity)
-			delete(pd.placement, grain.Identity)
-		}
+		delete(silo.grains, identity)
+		delete(p.placement, identity)
 	}
+}
+
+func (p *placementDriver) Activate(siloAddr addr.LogicAddr, identity pd.GrainIdentity) error {
+	p.Lock()
+	defer p.Unlock()
+	silo, ok := p.placement[identity]
+	if !ok || silo.logicAddr == siloAddr {
+		for _, v := range p.silos {
+			if v.logicAddr == siloAddr {
+				v.grains[identity] = struct{}{}
+				return nil
+			}
+		}
+		panic("siloAddr not found")
+	}
+	return pd.ErrorRedirect{Addr: silo.logicAddr}
 }
 
 type placementDriverClient struct {
 	sync.Mutex
-	driver         *placementDriver
-	localCache     map[string]addr.LogicAddr
-	selfAddr       addr.LogicAddr
-	activeCallback func(pd.Grain) bool
+	driver     *placementDriver
+	localCache map[pd.GrainIdentity]addr.LogicAddr
+	selfAddr   addr.LogicAddr
+	getMetric  func() pd.Metric
 }
 
-func (pdc *placementDriverClient) Login(ctx context.Context) (grains []pd.Grain, err error) {
-	grains = pdc.driver.Login(pdc)
-	pdc.Lock()
-	defer pdc.Unlock()
-	for _, v := range grains {
-		pdc.localCache[v.Identity] = pdc.selfAddr
-	}
-	return grains, err
+func (pdc *placementDriverClient) SetGetMetric(getMetric func() pd.Metric) {
+	pdc.getMetric = getMetric
 }
 
-func (pdc *placementDriverClient) GetPlacement(ctx context.Context, identity string) (addr.LogicAddr, error) {
+func (pdc *placementDriverClient) Login(ctx context.Context) (err error) {
+	pdc.driver.Login(pdc.selfAddr, pdc.getMetric())
+	return nil
+}
+
+func (pdc *placementDriverClient) GetPlacement(ctx context.Context, identity pd.GrainIdentity) (addr.LogicAddr, error) {
 	pdc.Lock()
 	defer pdc.Unlock()
 	logicAddr, ok := pdc.localCache[identity]
 	if ok {
 		return logicAddr, nil
 	} else {
-		logicAddr, err := pdc.driver.GetPlacement(pdc, identity)
+		logicAddr, err := pdc.driver.GetPlacement(pdc.selfAddr, identity)
 		if err == nil {
 			pdc.localCache[identity] = logicAddr
 		}
@@ -195,20 +194,12 @@ func (pdc *placementDriverClient) GetPlacement(ctx context.Context, identity str
 	}
 }
 
-func (pdc *placementDriverClient) SetActiveCallback(cb func(pd.Grain) bool) {
-	pdc.activeCallback = func(grain pd.Grain) bool {
-		if !cb(grain) {
-			return false
-		}
-		pdc.Lock()
-		pdc.localCache[grain.Identity] = pdc.selfAddr
-		pdc.Unlock()
-		return true
-	}
+func (pdc *placementDriverClient) Activate(ctx context.Context, identity pd.GrainIdentity) error {
+	return pdc.driver.Activate(pdc.selfAddr, identity)
 }
 
-func (pdc *placementDriverClient) Deactvie(ctx context.Context, grain pd.Grain) error {
-	pdc.driver.Deactvie(pdc.selfAddr, grain)
+func (pdc *placementDriverClient) Deactivate(ctx context.Context, identity pd.GrainIdentity) error {
+	pdc.driver.Deactivate(pdc.selfAddr, identity)
 	return nil
 }
 
@@ -216,10 +207,18 @@ func (pdc *placementDriverClient) MarkUnAvaliable() {
 
 }
 
-func (pdc *placementDriverClient) ClearPlacementCache(identity string) {
+func (pdc *placementDriverClient) ResetPlacementCache(identity pd.GrainIdentity, newAddr addr.LogicAddr) {
 	pdc.Lock()
 	defer pdc.Unlock()
-	delete(pdc.localCache, identity)
+	if newAddr.Empty() {
+
+	} else {
+		pdc.localCache[identity] = newAddr
+	}
+}
+
+func (pdc *placementDriverClient) Logout(context.Context) error {
+	return nil
 }
 
 type User struct {
@@ -239,12 +238,12 @@ func (u *User) Init(grain *Grain) error {
 	return nil
 }
 
-func (u *User) Deactive() error {
+func (u *User) Deactivate() error {
 	//将User保存到数据库
 	return nil
 }
 
-func factory(identity string) UserObject {
+func factory(identity pd.GrainIdentity) UserObject {
 	return &User{}
 }
 
@@ -256,7 +255,6 @@ func init() {
 
 func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
 	silo, _ := newSilo(context.Background(), pdc, node, factory)
-	//pdc.SetActiveCallback(silo.activeCallback)
 	node.RegisterBinrayHandler(Actor_request, func(from addr.LogicAddr, cmd uint16, msg []byte) {
 		req := RequestMsg{}
 		if err := req.Decode(msg); err != nil {
@@ -264,8 +262,9 @@ func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
 		} else {
 			silo.OnRPCRequest(context.TODO(), from, &req)
 		}
-	}).RegisterBinrayHandler(Actor_notify_not_exist, func(from addr.LogicAddr, cmd uint16, msg []byte) {
-		pdc.ClearPlacementCache(string(msg))
+	}).RegisterBinrayHandler(Actor_notify_redirect, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+		pdc.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
 	})
 	return silo
 }
@@ -289,12 +288,12 @@ func TestGoleans(t *testing.T) {
 	})
 
 	pdServer := &placementDriver{
-		placement: map[string]*pdSilo{},
+		placement: map[pd.GrainIdentity]*pdSilo{},
 	}
 
 	pdClient1 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[string]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
 		selfAddr:   node1Addr.LogicAddr(),
 	}
 
@@ -309,7 +308,7 @@ func TestGoleans(t *testing.T) {
 
 	pdClient2 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[string]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
 		selfAddr:   node2Addr.LogicAddr(),
 	}
 
@@ -322,8 +321,9 @@ func TestGoleans(t *testing.T) {
 		} else {
 			rpcClient.OnRPCResponse(context.TODO(), &resp)
 		}
-	}).RegisterBinrayHandler(Actor_notify_not_exist, func(from addr.LogicAddr, cmd uint16, msg []byte) {
-		pdClient2.ClearPlacementCache(string(msg))
+	}).RegisterBinrayHandler(Actor_notify_redirect, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+		pdClient2.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
 	})
 
 	var resp echo.Response
@@ -338,7 +338,7 @@ func TestGoleans(t *testing.T) {
 		Msg: "Hello2",
 	}, &resp)
 
-	fmt.Println(err, &resp)
+	fmt.Println(err)
 
 	Stop()
 }
@@ -363,13 +363,13 @@ func TestGrain(t *testing.T) {
 	})
 
 	pdServer := &placementDriver{
-		placement: map[string]*pdSilo{},
+		placement: map[pd.GrainIdentity]*pdSilo{},
 	}
 
 	node1 := clustergo.NewClusterNode(clustergo.JsonCodec{})
 	pdClient1 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[string]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
 		selfAddr:   node1Addr.LogicAddr(),
 	}
 	silo1 := createSilo(node1, pdClient1)
@@ -383,7 +383,7 @@ func TestGrain(t *testing.T) {
 
 	pdClient2 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[string]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
 		selfAddr:   node2Addr.LogicAddr(),
 	}
 
@@ -396,8 +396,9 @@ func TestGrain(t *testing.T) {
 		} else {
 			rpcClient.OnRPCResponse(context.TODO(), &resp)
 		}
-	}).RegisterBinrayHandler(Actor_notify_not_exist, func(from addr.LogicAddr, cmd uint16, msg []byte) {
-		pdClient2.ClearPlacementCache(string(msg))
+	}).RegisterBinrayHandler(Actor_notify_redirect, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+		pdClient2.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
 	})
 
 	var resp echo.Response

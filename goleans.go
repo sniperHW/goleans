@@ -2,6 +2,7 @@ package goleans
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"goleans/pd"
 	"sync"
@@ -21,7 +22,7 @@ var (
 	started   atomic.Bool
 )
 
-func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, userObjectFactory func(string) UserObject) error {
+func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, userObjectFactory func(pd.GrainIdentity) UserObject) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
@@ -58,15 +59,18 @@ func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDri
 			} else {
 				rpcClient.OnRPCResponse(context.TODO(), &resp)
 			}
-		}).RegisterBinrayHandler(Actor_notify_not_exist, func(from addr.LogicAddr, cmd uint16, msg []byte) {
-			placementDriver.ClearPlacementCache(string(msg))
+		}).RegisterBinrayHandler(Actor_notify_redirect, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+			if len(msg) > 4 {
+				newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+				placementDriver.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
+			}
 		})
 		started.Store(true)
 	}
 	return nil
 }
 
-func Call(ctx context.Context, identity string, method uint16, arg proto.Message, ret proto.Message) error {
+func Call(ctx context.Context, identity pd.GrainIdentity, method uint16, arg proto.Message, ret proto.Message) error {
 	if !started.Load() {
 		return errors.New("not started")
 	}

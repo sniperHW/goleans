@@ -120,7 +120,7 @@ func TestMailbox(t *testing.T) {
 			})
 		}
 
-		box.Close()
+		box.Close(true)
 		fmt.Println("box closed")
 	}
 
@@ -141,7 +141,7 @@ func TestMailbox(t *testing.T) {
 			})
 		}
 
-		box.Close()
+		box.Close(true)
 		fmt.Println("box closed")
 	}
 
@@ -167,6 +167,6 @@ func TestAwait(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	box.Close()
+	box.Close(true)
 	fmt.Println("box closed")
 }

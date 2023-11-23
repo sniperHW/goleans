@@ -18,37 +18,39 @@ import (
 )
 
 const (
-	lenSeq                 = 8
-	lenOneWay              = 1
-	lenMethod              = 2
-	lenIdentityLen         = 2
-	lenErrCode             = 2
-	lenArg                 = 4
-	lenReqHdr              = lenSeq + lenOneWay + lenMethod + lenIdentityLen
-	lenRspHdr              = lenSeq + lenErrCode
-	Actor_request          = 11311
-	Actor_response         = 11312
-	Actor_notify_not_exist = 11313
+	lenSeq                = 8
+	lenOneWay             = 1
+	lenMethod             = 2
+	lenIdentityLen        = 2
+	lenErrCode            = 2
+	lenArg                = 4
+	lenReqHdr             = lenSeq + lenOneWay + lenMethod + lenIdentityLen
+	lenRspHdr             = lenSeq + lenErrCode
+	Actor_request         = 11311
+	Actor_response        = 11312
+	Actor_notify_redirect = 11313
 )
 
 const (
 	ErrOk = iota
 	ErrMethodCallPanic
 	ErrInvaildArg
-	ErrGrainNotExist
 	ErrMethodNotExist
 	ErrUserGrainCreateError
 	ErrUserGrainInitError
+	ErrRedirect
+	ErrRetryAgain
 )
 
 var errDesc []error = []error{
 	errors.New("Ok"),
 	errors.New("Method call Panic"),
 	errors.New("Invaild Arg"),
-	errors.New("Grain Not Exist"),
 	errors.New("Method Not Exist"),
 	errors.New("User Grain Create Error"),
 	errors.New("User Grain Init Error"),
+	errors.New("Placement Redirect"),
+	errors.New("Retry"),
 }
 
 func getDescByErrCode(code uint16) error {
@@ -63,14 +65,15 @@ type RequestMsg struct {
 	Seq    uint64
 	Method uint16
 	Oneway bool
-	To     string
+	To     pd.GrainIdentity
 	Arg    []byte
 }
 
 type ResponseMsg struct {
-	Seq     uint64
-	ErrCode int
-	Ret     []byte
+	Seq          uint64
+	ErrCode      int
+	RedirectAddr int
+	Ret          []byte
 }
 
 func (req *RequestMsg) Encode() []byte {
@@ -125,7 +128,7 @@ func (req *RequestMsg) Decode(buff []byte) error {
 	if buffLen-r < lenIdentity {
 		return errors.New("invaild request packet")
 	}
-	req.To = string(buff[r : r+lenIdentity])
+	req.To = pd.GrainIdentity(buff[r : r+lenIdentity])
 	r += lenIdentity
 
 	if buffLen-r > 0 {
@@ -137,10 +140,17 @@ func (req *RequestMsg) Decode(buff []byte) error {
 }
 
 func (resp *ResponseMsg) Encode() (buff []byte) {
-	buff = make([]byte, 10, lenRspHdr+len(resp.Ret))
-	binary.BigEndian.PutUint64(buff, resp.Seq)
-	binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
-	buff = append(buff, resp.Ret...)
+	if resp.ErrCode == ErrRedirect {
+		buff = make([]byte, lenRspHdr+4, lenRspHdr+4)
+		binary.BigEndian.PutUint64(buff, resp.Seq)
+		binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
+		binary.BigEndian.PutUint32(buff[10:], uint32(resp.RedirectAddr))
+	} else {
+		buff = make([]byte, lenRspHdr, lenRspHdr+len(resp.Ret))
+		binary.BigEndian.PutUint64(buff, resp.Seq)
+		binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
+		buff = append(buff, resp.Ret...)
+	}
 	return buff
 }
 
@@ -160,9 +170,15 @@ func (resp *ResponseMsg) Decode(buff []byte) error {
 	resp.ErrCode = int(binary.BigEndian.Uint16(buff[r:]))
 	r += lenErrCode
 
-	if buffLen-r > 0 {
-		resp.Ret = make([]byte, 0, buffLen-r)
-		resp.Ret = append(resp.Ret, buff[r:]...)
+	if resp.ErrCode == ErrRedirect {
+		if buffLen-r >= 4 {
+			resp.RedirectAddr = int(binary.BigEndian.Uint32(buff[r:]))
+		}
+	} else {
+		if buffLen-r > 0 {
+			resp.Ret = make([]byte, 0, buffLen-r)
+			resp.Ret = append(resp.Ret, buff[r:]...)
+		}
 	}
 	return nil
 }
@@ -173,16 +189,32 @@ type Replyer struct {
 	seq      uint64
 	replyed  int32
 	oneway   bool
-	identity string
+	identity pd.GrainIdentity
 	from     addr.LogicAddr
 	node     *clustergo.Node
 }
 
-func (r *Replyer) Error(errCode int) {
-	if errCode == ErrGrainNotExist && r.oneway {
+func (r *Replyer) Redirect(redirectAddr addr.LogicAddr) {
+	if r.oneway {
 		//通告对端identity不在当前节点
-		r.node.SendBinMessage(r.from, Actor_notify_not_exist, []byte(r.identity))
-	} else if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+		buff := make([]byte, 4, len(r.identity)+4)
+		binary.BigEndian.PutUint32(buff, uint32(redirectAddr))
+		buff = append(buff, []byte(r.identity)...)
+		r.node.SendBinMessage(r.from, Actor_notify_redirect, buff)
+	} else if atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+		resp := &ResponseMsg{
+			Seq:          r.seq,
+			ErrCode:      ErrRedirect,
+			RedirectAddr: int(redirectAddr),
+		}
+		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+		}
+	}
+}
+
+func (r *Replyer) Error(errCode int) {
+	if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
 		resp := &ResponseMsg{
 			Seq:     r.seq,
 			ErrCode: errCode,
@@ -271,22 +303,24 @@ func (c *methodCaller) call(context context.Context, replyer *Replyer, req *Requ
 /////Client
 
 type callContext struct {
-	onResponse   func(interface{}, error)
+	respC        chan error
 	fired        int32
 	respReceiver proto.Message
 }
 
-func (c *callContext) callOnResponse(resp []byte, err int) {
+func (c *callContext) callOnResponse(resp *ResponseMsg) {
 	if atomic.CompareAndSwapInt32(&c.fired, 0, 1) {
-		if err == ErrOk {
-			if e := proto.Unmarshal(resp, c.respReceiver); e != nil {
+		if resp.ErrCode == ErrOk {
+			if e := proto.Unmarshal(resp.Ret, c.respReceiver); e != nil {
 				logger.Errorf("callOnResponse decode error:%v", e)
-				c.onResponse(nil, errors.New("invaild respReceiver"))
+				c.respC <- errors.New("invaild respReceiver")
 			} else {
-				c.onResponse(c.respReceiver, nil)
+				c.respC <- nil
 			}
+		} else if resp.ErrCode == ErrRedirect {
+			c.respC <- pd.ErrorRedirect{Addr: addr.LogicAddr(resp.RedirectAddr)}
 		} else {
-			c.onResponse(nil, getDescByErrCode(uint16(err)))
+			c.respC <- getDescByErrCode(uint16(resp.ErrCode))
 		}
 	}
 }
@@ -331,13 +365,13 @@ func (c *RPCClient) makeSequence() (seq uint64) {
 
 func (c *RPCClient) OnRPCResponse(ctx context.Context, resp *ResponseMsg) {
 	if ctx, ok := c.pendingCall[int(resp.Seq)%len(c.pendingCall)].LoadAndDelete(resp.Seq); ok {
-		ctx.(*callContext).callOnResponse(resp.Ret, resp.ErrCode)
+		ctx.(*callContext).callOnResponse(resp)
 	} else {
 		logger.Infof("onResponse with no reqContext:%d", resp.Seq)
 	}
 }
 
-func (c *RPCClient) Call(ctx context.Context, identity string, method uint16, arg proto.Message, ret proto.Message) error {
+func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method uint16, arg proto.Message, ret proto.Message) error {
 	if b, err := proto.Marshal(arg); err != nil {
 		return err
 	} else {
@@ -355,26 +389,26 @@ func (c *RPCClient) Call(ctx context.Context, identity string, method uint16, ar
 			}
 
 			if ret != nil {
-				waitC := make(chan error, 1)
 				pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
 
-				pending.Store(reqMessage.Seq, &callContext{
+				callCtx := &callContext{
 					respReceiver: ret,
-					onResponse: func(_ interface{}, err error) {
-						waitC <- err
-					},
-				})
+					respC:        make(chan error),
+				}
+
+				pending.Store(reqMessage.Seq, callCtx)
 
 				c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
 
 				select {
-				case err := <-waitC:
-					if err == nil || err != getDescByErrCode(ErrGrainNotExist) {
+				case err := <-callCtx.respC:
+					switch err := err.(type) {
+					case pd.ErrorRedirect:
+						c.placementDriver.ResetPlacementCache(identity, err.Addr)
+					case error:
 						return err
-					} else {
-						//err == ErrGrainNotExist
-						c.placementDriver.ClearPlacementCache(identity)
-						//continue
+					default:
+						return nil
 					}
 				case <-ctx.Done():
 					pending.Delete(reqMessage.Seq)

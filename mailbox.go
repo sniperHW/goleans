@@ -224,9 +224,11 @@ func (m *Mailbox) Await(fn interface{}, args ...interface{}) (ret []interface{})
 	return ret
 }
 
-func (m *Mailbox) Close() {
+func (m *Mailbox) Close(wait bool) {
 	if atomic.CompareAndSwapInt32(&m.closed, 0, 1) {
 		close(m.die)
 	}
-	<-m.closeCh
+	if wait {
+		<-m.closeCh
+	}
 }
