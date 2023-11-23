@@ -14,7 +14,6 @@ import (
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
-	"github.com/sniperHW/netgo"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -411,7 +410,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					return err
 				}
 
-				err = c.node.SendBinMessage(remoteAddr, Actor_request, req)
+				err = c.node.SendBinMessageContext(ctx, remoteAddr, Actor_request, req)
 
 				if err == nil {
 					//发送成功，等待响应
@@ -447,7 +446,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 				} else if err == clustergo.ErrInvaildNode {
 					//对端地址已经失效，清除本地缓存，再次重试
 					c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
-				} else if err != netgo.ErrSendTimeout {
+				} else {
 					pending.Delete(reqMessage.Seq)
 					return err
 				}
@@ -460,7 +459,6 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					case context.Canceled:
 						return errors.New("canceled")
 					case context.DeadlineExceeded:
-						c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
 						return errors.New("timeout")
 					default:
 						return errors.New("unknow")
