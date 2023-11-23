@@ -398,7 +398,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 
 				pending.Store(reqMessage.Seq, callCtx)
 
-				c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
+				err = c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
 
 				select {
 				case err := <-callCtx.respC:
@@ -431,7 +431,11 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 				}
 			} else {
 				reqMessage.Oneway = true
-				return c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
+				err := c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
+				if err == clustergo.ErrInvaildNode {
+					c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+				}
+				return err
 			}
 		}
 	}
