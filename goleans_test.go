@@ -1,5 +1,8 @@
 package goleans
 
+//go test -race -covermode=atomic -v -coverprofile=coverage.out -run=.
+//go tool cover -html=coverage.out
+
 import (
 	"context"
 	"encoding/binary"
@@ -8,6 +11,7 @@ import (
 	"goleans/testproto/echo"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
@@ -58,7 +62,6 @@ func (d *localDiscovery) ModifyNode(modify *discovery.Node) {
 	if n, ok := d.nodes[modify.Addr.LogicAddr()]; ok {
 		if n.Available != modify.Available || n.Addr.NetAddr() != modify.Addr.NetAddr() {
 			d.nodes[modify.Addr.LogicAddr()] = modify
-			//nodes := d.LoadNodeInfo()
 			update := discovery.DiscoveryInfo{
 				Update: []discovery.Node{*modify},
 			}
@@ -162,12 +165,22 @@ func (p *placementDriver) Activate(siloAddr addr.LogicAddr, identity pd.GrainIde
 	return pd.ErrorRedirect{Addr: silo.logicAddr}
 }
 
+type placementCache struct {
+	siloAddr      addr.LogicAddr
+	cacheDeadline time.Time
+}
+
 type placementDriverClient struct {
 	sync.Mutex
 	driver     *placementDriver
-	localCache map[pd.GrainIdentity]addr.LogicAddr
+	localCache map[pd.GrainIdentity]placementCache
 	selfAddr   addr.LogicAddr
 	getMetric  func() pd.Metric
+	cacheTime  time.Duration
+}
+
+func (pdc *placementDriverClient) SetCacheTime(d time.Duration) {
+	pdc.cacheTime = d
 }
 
 func (pdc *placementDriverClient) SetGetMetric(getMetric func() pd.Metric) {
@@ -182,15 +195,19 @@ func (pdc *placementDriverClient) Login(ctx context.Context) (err error) {
 func (pdc *placementDriverClient) GetPlacement(ctx context.Context, identity pd.GrainIdentity) (addr.LogicAddr, error) {
 	pdc.Lock()
 	defer pdc.Unlock()
-	logicAddr, ok := pdc.localCache[identity]
-	if ok {
-		return logicAddr, nil
+	now := time.Now()
+	cache, ok := pdc.localCache[identity]
+	if ok && cache.cacheDeadline.After(now) {
+		return cache.siloAddr, nil
 	} else {
-		logicAddr, err := pdc.driver.GetPlacement(pdc.selfAddr, identity)
+		siloAddr, err := pdc.driver.GetPlacement(pdc.selfAddr, identity)
 		if err == nil {
-			pdc.localCache[identity] = logicAddr
+			pdc.localCache[identity] = placementCache{
+				siloAddr:      siloAddr,
+				cacheDeadline: time.Now().Add(pdc.cacheTime),
+			}
 		}
-		return logicAddr, err
+		return siloAddr, err
 	}
 }
 
@@ -211,9 +228,12 @@ func (pdc *placementDriverClient) ResetPlacementCache(identity pd.GrainIdentity,
 	pdc.Lock()
 	defer pdc.Unlock()
 	if newAddr.Empty() {
-
+		delete(pdc.localCache, identity)
 	} else {
-		pdc.localCache[identity] = newAddr
+		pdc.localCache[identity] = placementCache{
+			siloAddr:      newAddr,
+			cacheDeadline: time.Now().Add(pdc.cacheTime),
+		}
 	}
 }
 
@@ -293,7 +313,7 @@ func TestGoleans(t *testing.T) {
 
 	pdClient1 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]placementCache{},
 		selfAddr:   node1Addr.LogicAddr(),
 	}
 
@@ -308,7 +328,7 @@ func TestGoleans(t *testing.T) {
 
 	pdClient2 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]placementCache{},
 		selfAddr:   node2Addr.LogicAddr(),
 	}
 
@@ -369,7 +389,7 @@ func TestGrain(t *testing.T) {
 	node1 := clustergo.NewClusterNode(clustergo.JsonCodec{})
 	pdClient1 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]placementCache{},
 		selfAddr:   node1Addr.LogicAddr(),
 	}
 	silo1 := createSilo(node1, pdClient1)
@@ -383,7 +403,7 @@ func TestGrain(t *testing.T) {
 
 	pdClient2 := &placementDriverClient{
 		driver:     pdServer,
-		localCache: map[pd.GrainIdentity]addr.LogicAddr{},
+		localCache: map[pd.GrainIdentity]placementCache{},
 		selfAddr:   node2Addr.LogicAddr(),
 	}
 

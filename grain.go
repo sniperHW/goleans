@@ -128,7 +128,7 @@ func (grain *Grain) AfterFunc(d time.Duration, f func()) {
 	})
 }
 
-func (grain *Grain) stop(fn func()) {
+func (grain *Grain) onSiloStop(fn func()) {
 	grain.stoped = true
 	switch grain.state {
 	case grain_activated:
@@ -152,7 +152,7 @@ func (grain *Grain) stop(fn func()) {
 		} else {
 			//还有异步任务未完成，100毫秒后尝试
 			grain.AfterFunc(time.Millisecond*100, func() {
-				grain.stop(fn)
+				grain.onSiloStop(fn)
 			})
 		}
 	default:

@@ -405,8 +405,15 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					switch err := err.(type) {
 					case pd.ErrorRedirect:
 						c.placementDriver.ResetPlacementCache(identity, err.Addr)
+						if err.Addr.Empty() {
+							time.Sleep(time.Millisecond * 100)
+						}
 					case error:
-						return err
+						if err == getDescByErrCode(ErrRetryAgain) {
+							time.Sleep(time.Millisecond * 100)
+						} else {
+							return err
+						}
 					default:
 						return nil
 					}
@@ -416,6 +423,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					case context.Canceled:
 						return errors.New("canceled")
 					case context.DeadlineExceeded:
+						c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
 						return errors.New("timeout")
 					default:
 						return errors.New("unknow")

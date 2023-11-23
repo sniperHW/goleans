@@ -3,12 +3,11 @@ package goleans
 import (
 	"context"
 	"fmt"
-	"runtime"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
+/*
 func TestBenchmarkChannel(t *testing.T) {
 	box := make(chan func(), 64)
 
@@ -100,7 +99,7 @@ func TestBenchmarkAwait(t *testing.T) {
 		fmt.Println(atomic.LoadInt32(&counter))
 		atomic.StoreInt32(&counter, 0)
 	}
-}
+}*/
 
 func TestMailbox(t *testing.T) {
 	{

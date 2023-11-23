@@ -2,6 +2,7 @@ package pd
 
 import (
 	"context"
+	"time"
 
 	"github.com/sniperHW/clustergo/addr"
 )
@@ -23,6 +24,9 @@ func (e ErrorRedirect) Error() string {
 }
 
 type PlacementDriver interface {
+	//设置Grain地址信息的缓存时间，GetPlacement会将本地Cache作废，强制从pdserver获取一次
+	SetCacheTime(time.Duration)
+
 	SetGetMetric(func() Metric)
 
 	Login(context.Context) error

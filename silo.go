@@ -67,13 +67,14 @@ func (s *Silo) Stop() {
 		for _, v := range s.grains {
 			wait.Add(1)
 			if v.mailbox.PushTask(context.TODO(), func() {
-				v.stop(wait.Done)
+				v.onSiloStop(wait.Done)
 			}) != nil {
 				wait.Done()
 			}
 		}
 		s.Unlock()
 		wait.Wait()
+		s.placementDriver.Logout(context.TODO())
 	}
 }
 
@@ -101,6 +102,8 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 	grain.lastRequest.Store(time.Now())
 	err := grain.AddTask(ctx, func() {
 		if grain.stoped {
+			//silo正在停止
+			replyer.Redirect(0)
 			return
 		}
 
