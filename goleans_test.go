@@ -354,7 +354,10 @@ func TestGoleans(t *testing.T) {
 	fmt.Println(err, &resp)
 	node2.Stop()
 
-	err = Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err = Call(ctx, "sniperHW@User", 1, &echo.Request{
 		Msg: "Hello2",
 	}, &resp)
 
@@ -421,8 +424,11 @@ func TestGrain(t *testing.T) {
 		pdClient2.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
 	})
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
 	var resp echo.Response
-	err = rpcClient.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+	err = rpcClient.Call(ctx, "sniperHW@User", 1, &echo.Request{
 		Msg: "Hello",
 	}, &resp)
 

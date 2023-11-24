@@ -120,7 +120,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 				return
 			case error:
 				logger.Errorf("Activate Grain:%s error:%v", grain.Identity, err)
-				replyer.Error(ErrRetryAgain)
+				replyer.Error(ErrCodeRetryAgain)
 				s.removeGrain(grain)
 				grain.mailbox.Close(false)
 				return
@@ -143,7 +143,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 
 			if err := grain.userObject.Init(grain); err != nil {
 				logger.Errorf("Create Grain:%s Init error:%e", grain.Identity, err)
-				replyer.Error(ErrRetryAgain)
+				replyer.Error(ErrCodeRetryAgain)
 				return
 			} else {
 				grain.state = grain_running
@@ -154,7 +154,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 			if fn := grain.methods[req.Method]; fn != nil {
 				fn.call(ctx, replyer, req)
 			} else {
-				replyer.Error(ErrMethodNotExist)
+				replyer.Error(ErrCodeMethodNotExist)
 			}
 		} else {
 			replyer.Redirect(addr.LogicAddr(0))

@@ -14,6 +14,7 @@ import (
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
+	"github.com/sniperHW/netgo"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -32,25 +33,38 @@ const (
 )
 
 const (
-	ErrOk = iota
-	ErrMethodCallPanic
-	ErrInvaildArg
-	ErrMethodNotExist
-	ErrUserGrainCreateError
-	ErrUserGrainInitError
-	ErrRedirect
-	ErrRetryAgain
+	ErrCodeOk = iota
+	ErrCodeMethodCallPanic
+	ErrCodeInvaildArg
+	ErrCodeMethodNotExist
+	ErrCodeUserGrainCreateError
+	ErrCodeUserGrainInitError
+	ErrCodeRedirect
+	ErrCodeRetryAgain
+)
+
+var (
+	ErrCallOK              = errors.New("call ok")
+	ErrCallTimeout         = errors.New("call timeout")
+	ErrCallCancel          = errors.New("context.Cancel")
+	ErrCallMethodPanic     = errors.New("method call Panic")
+	ErrCallInvaildArgument = errors.New("method call invaild argument")
+	ErrCallMethodNotFound  = errors.New("method call method not found")
+	ErrCallGrainCreate     = errors.New("user Grain Create Error")
+	ErrCallGrainInit       = errors.New("user Grain Init Error")
+	ErrCallRedirect        = errors.New("grain placement Redirect")
+	ErrCallRetry           = errors.New("retry again")
 )
 
 var errDesc []error = []error{
-	errors.New("ok"),
-	errors.New("method call Panic"),
-	errors.New("invaild Arg"),
-	errors.New("method Not Exist"),
-	errors.New("user Grain Create Error"),
-	errors.New("user Grain Init Error"),
-	errors.New("placement Redirect"),
-	errors.New("retry"),
+	ErrCallOK,
+	ErrCallMethodPanic,
+	ErrCallInvaildArgument,
+	ErrCallMethodNotFound,
+	ErrCallGrainCreate,
+	ErrCallGrainInit,
+	ErrCallRedirect,
+	ErrCallRetry,
 }
 
 func getDescByErrCode(code uint16) error {
@@ -140,7 +154,7 @@ func (req *RequestMsg) Decode(buff []byte) error {
 }
 
 func (resp *ResponseMsg) Encode() (buff []byte) {
-	if resp.ErrCode == ErrRedirect {
+	if resp.ErrCode == ErrCodeRedirect {
 		buff = make([]byte, lenRspHdr+4)
 		binary.BigEndian.PutUint64(buff, resp.Seq)
 		binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
@@ -170,7 +184,7 @@ func (resp *ResponseMsg) Decode(buff []byte) error {
 	resp.ErrCode = int(binary.BigEndian.Uint16(buff[r:]))
 	r += lenErrCode
 
-	if resp.ErrCode == ErrRedirect {
+	if resp.ErrCode == ErrCodeRedirect {
 		if buffLen-r >= 4 {
 			resp.RedirectAddr = int(binary.BigEndian.Uint32(buff[r:]))
 		}
@@ -204,7 +218,7 @@ func (r *Replyer) Redirect(redirectAddr addr.LogicAddr) {
 	} else if atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
 		resp := &ResponseMsg{
 			Seq:          r.seq,
-			ErrCode:      ErrRedirect,
+			ErrCode:      ErrCodeRedirect,
 			RedirectAddr: int(redirectAddr),
 		}
 		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
@@ -291,12 +305,12 @@ func (c *methodCaller) call(context context.Context, replyer *Replyer, req *Requ
 				buf := make([]byte, 65535)
 				l := runtime.Stack(buf, false)
 				logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
-				replyer.Error(ErrMethodCallPanic)
+				replyer.Error(ErrCodeMethodCallPanic)
 			}
 		}()
 		c.fn.Call([]reflect.Value{reflect.ValueOf(context), reflect.ValueOf(replyer), reflect.ValueOf(arg)})
 	} else {
-		replyer.Error(ErrInvaildArg)
+		replyer.Error(ErrCodeInvaildArg)
 	}
 }
 
@@ -310,14 +324,14 @@ type callContext struct {
 
 func (c *callContext) callOnResponse(resp *ResponseMsg) {
 	if atomic.CompareAndSwapInt32(&c.fired, 0, 1) {
-		if resp.ErrCode == ErrOk {
+		if resp.ErrCode == ErrCodeOk {
 			if e := proto.Unmarshal(resp.Ret, c.respReceiver); e != nil {
 				logger.Errorf("callOnResponse decode error:%v", e)
 				c.respC <- errors.New("invaild respReceiver")
 			} else {
 				c.respC <- nil
 			}
-		} else if resp.ErrCode == ErrRedirect {
+		} else if resp.ErrCode == ErrCodeRedirect {
 			c.respC <- pd.ErrorRedirect{Addr: addr.LogicAddr(resp.RedirectAddr)}
 		} else {
 			c.respC <- getDescByErrCode(uint16(resp.ErrCode))
@@ -381,50 +395,70 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 			Method: method,
 			Arg:    b,
 		}
-
 		if ret == nil {
-			remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
-			if err != nil {
-				return err
-			}
 			reqMessage.Oneway = true
-			err = c.node.SendBinMessage(remoteAddr, Actor_request, reqMessage.Encode())
-			if err == clustergo.ErrInvaildNode {
-				c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+			req := reqMessage.Encode()
+			for {
+				var pdErr error
+				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
+				if err != nil {
+					pdErr = err
+					time.Sleep(time.Millisecond * 10)
+				} else if err = c.node.SendBinMessageWithContext(ctx, remoteAddr, Actor_request, req); err == nil {
+					return nil
+				} else {
+					switch err {
+					case clustergo.ErrInvaildNode:
+						c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+					case clustergo.ErrPendingQueueFull, netgo.ErrSendQueueFull, netgo.ErrPushToSendQueueTimeout:
+						time.Sleep(time.Millisecond * 10)
+					default:
+						return err
+					}
+				}
+
+				select {
+				case <-ctx.Done():
+					if pdErr != nil {
+						logger.Errorf("call grain:%s timeout with pd error:%v", identity, pdErr)
+					}
+					switch ctx.Err() {
+					case context.Canceled:
+						return ErrCallCancel
+					default:
+						return ErrCallTimeout
+					}
+				default:
+				}
+
 			}
-			return err
 		} else {
+			req := reqMessage.Encode()
 			pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
 			callCtx := &callContext{
 				respReceiver: ret,
 				respC:        make(chan error),
 			}
 			pending.Store(reqMessage.Seq, callCtx)
-
-			req := reqMessage.Encode()
-
 			for {
+				var pdErr error
 				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
 				if err != nil {
-					pending.Delete(reqMessage.Seq)
-					return err
-				}
-
-				err = c.node.SendBinMessageContext(ctx, remoteAddr, Actor_request, req)
-
-				if err == nil {
-					//发送成功，等待响应
+					pdErr = err
+					time.Sleep(time.Millisecond * 10)
+				} else if err = c.node.SendBinMessageWithContext(ctx, remoteAddr, Actor_request, req); err == nil {
+					//等待响应
 					select {
 					case err := <-callCtx.respC:
 						switch err := err.(type) {
 						case pd.ErrorRedirect:
 							c.placementDriver.ResetPlacementCache(identity, err.Addr)
 							if err.Addr.Empty() {
-								time.Sleep(time.Millisecond * 100)
+								time.Sleep(time.Millisecond * 10)
 							}
 						case error:
-							if err == getDescByErrCode(ErrRetryAgain) {
-								time.Sleep(time.Millisecond * 100)
+							if err == ErrCallRetry {
+								time.Sleep(time.Millisecond * 10)
 							} else {
 								return err
 							}
@@ -443,25 +477,29 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 							return errors.New("unknow")
 						}
 					}
-				} else if err == clustergo.ErrInvaildNode {
-					//对端地址已经失效，清除本地缓存，再次重试
-					c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
 				} else {
-					pending.Delete(reqMessage.Seq)
-					return err
+					switch err {
+					case clustergo.ErrInvaildNode:
+						c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+					case clustergo.ErrPendingQueueFull, netgo.ErrSendQueueFull, netgo.ErrPushToSendQueueTimeout:
+						time.Sleep(time.Millisecond * 10)
+					default:
+						pending.Delete(reqMessage.Seq)
+						return err
+					}
 				}
-
 				//检查是否可以执行重试
 				select {
 				case <-ctx.Done():
 					pending.Delete(reqMessage.Seq)
+					if pdErr != nil {
+						logger.Errorf("call grain:%s timeout with pd error:%v", identity, pdErr)
+					}
 					switch ctx.Err() {
 					case context.Canceled:
-						return errors.New("canceled")
-					case context.DeadlineExceeded:
-						return errors.New("timeout")
+						return ErrCallCancel
 					default:
-						return errors.New("unknow")
+						return ErrCallTimeout
 					}
 				default:
 				}
