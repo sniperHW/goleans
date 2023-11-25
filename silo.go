@@ -90,6 +90,11 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 		node:     s.node,
 	}
 
+	if s.stoped.Load() {
+		replyer.Redirect(0)
+		return
+	}
+
 	identity := pd.GrainIdentity(req.To)
 
 	s.Lock()
