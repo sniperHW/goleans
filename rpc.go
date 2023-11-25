@@ -262,7 +262,7 @@ type methodCaller struct {
 	fn      reflect.Value
 }
 
-// 接受的method func(context.Context, *Replyer,*Pointer)
+// 接受的method func(context.Context, *Replyer,proto.Message)
 func makeMethodCaller(method interface{}) (*methodCaller, error) {
 	if method == nil {
 		return nil, errors.New("method is nil")
@@ -270,23 +270,23 @@ func makeMethodCaller(method interface{}) (*methodCaller, error) {
 
 	fnType := reflect.TypeOf(method)
 	if fnType.Kind() != reflect.Func {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,*Pointer)")
+		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
 	}
 
 	if fnType.NumIn() != 3 {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,*Pointer)")
+		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
 	}
 
 	if !fnType.In(0).Implements(reflect.TypeOf((*context.Context)(nil)).Elem()) {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,*Pointer)")
+		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
 	}
 
 	if fnType.In(1) != reflect.TypeOf(&Replyer{}) {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,*Pointer)")
+		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
 	}
 
-	if fnType.In(2).Kind() != reflect.Ptr {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,*Pointer)")
+	if !fnType.In(2).Implements(reflect.TypeOf((*proto.Message)(nil)).Elem()) {
+		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
 	}
 
 	caller := &methodCaller{
