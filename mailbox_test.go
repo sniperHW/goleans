@@ -3,16 +3,14 @@ package goleans
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 )
 
-/*
-func TestBenchmarkChannel(t *testing.T) {
+func BenchmarkChannel(b *testing.B) {
 	box := make(chan func(), 64)
-
 	die := make(chan struct{})
-
 	go func() {
 		for {
 			select {
@@ -24,27 +22,19 @@ func TestBenchmarkChannel(t *testing.T) {
 		}
 	}()
 
-	counter := int32(0)
-	go func() {
-		for {
-			select {
-			case box <- func() {
-				atomic.AddInt32(&counter, 1)
-			}:
-			case <-die:
-				return
-			}
+	ret := make(chan struct{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		box <- func() {
+			ret <- struct{}{}
 		}
-	}()
-
-	for {
-		time.Sleep(time.Second)
-		fmt.Println(atomic.LoadInt32(&counter))
-		atomic.StoreInt32(&counter, 0)
+		<-ret
 	}
+	close(die)
 }
 
-func TestBenchmarkMailbox(t *testing.T) {
+func BenchmarkMailbox(b *testing.B) {
 	box := &Mailbox{
 		taskQueue:  make(chan func(), GrainTaskQueueCap),
 		awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
@@ -53,23 +43,20 @@ func TestBenchmarkMailbox(t *testing.T) {
 	}
 
 	box.Start()
-	counter := int32(0)
-	go func() {
-		for {
-			box.PushTask(context.Background(), func() {
-				atomic.AddInt32(&counter, 1)
-			})
-		}
-	}()
-
-	for {
-		time.Sleep(time.Second)
-		fmt.Println(atomic.LoadInt32(&counter))
-		atomic.StoreInt32(&counter, 0)
+	ret := make(chan struct{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		box.PushTask(context.Background(), func() {
+			ret <- struct{}{}
+		})
+		<-ret
 	}
+	box.Close(true)
+
 }
 
-func TestBenchmarkAwait(t *testing.T) {
+func BenchmarkAwait(b *testing.B) {
 	box := &Mailbox{
 		taskQueue:  make(chan func(), GrainTaskQueueCap),
 		awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
@@ -78,28 +65,19 @@ func TestBenchmarkAwait(t *testing.T) {
 	}
 
 	box.Start()
-	counter := int32(0)
+	ret := make(chan struct{})
+	b.ReportAllocs()
+	b.ResetTimer()
 
-	//限定流速，避免同时触发太多goroutine执行Await
-	rateLimit := make(chan struct{}, 100)
-
-	go func() {
-		for i := 0; ; i++ {
-			rateLimit <- struct{}{}
-			box.PushTask(context.Background(), func() {
-				box.Await(runtime.Gosched)
-				atomic.AddInt32(&counter, 1)
-				<-rateLimit
-			})
-		}
-	}()
-
-	for {
-		time.Sleep(time.Second)
-		fmt.Println(atomic.LoadInt32(&counter))
-		atomic.StoreInt32(&counter, 0)
+	for i := 0; i < b.N; i++ {
+		box.PushTask(context.Background(), func() {
+			box.Await(runtime.Gosched)
+			ret <- struct{}{}
+		})
+		<-ret
 	}
-}*/
+	box.Close(true)
+}
 
 func TestMailbox(t *testing.T) {
 	{
