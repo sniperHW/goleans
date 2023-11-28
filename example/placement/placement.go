@@ -16,6 +16,7 @@ import (
 	"github.com/sniperHW/clustergo/addr"
 	"github.com/sniperHW/clustergo/codec/buffer"
 	"github.com/sniperHW/netgo"
+	"go.uber.org/zap"
 )
 
 const (
@@ -34,6 +35,12 @@ const (
 	mark_unavaliableReq
 	mark_unavaliableResp
 )
+
+var logger *zap.Logger
+
+func InitLogger(l *zap.Logger) {
+	logger = l
+}
 
 type LoginReq struct {
 	Addr   addr.LogicAddr
@@ -112,6 +119,7 @@ func (cc *codec) Encode(buffs net.Buffers, o interface{}) (net.Buffers, int) {
 		} else {
 			b := make([]byte, 0, 12)
 			b = buffer.AppendUint32(b, uint32(len(buff)+4+4))
+			//logger.Sugar().Debugf("encode seq:%d", o.Seq)
 			b = buffer.AppendUint32(b, o.Seq)
 			switch o.PayLoad.(type) {
 			case *LoginReq:
@@ -156,8 +164,9 @@ func (cc *codec) Encode(buffs net.Buffers, o interface{}) (net.Buffers, int) {
 
 func (cc *codec) Decode(payload []byte) (interface{}, error) {
 	cc.reader.Reset(payload)
-	cmd := cc.reader.GetUint32()
 	seq := cc.reader.GetUint32()
+	cmd := cc.reader.GetUint32()
+	//logger.Sugar().Debugf("decode %d,%d", cmd, seq)
 	var o interface{}
 	switch cmd {
 	case loginReq:
@@ -275,15 +284,19 @@ type placementSvr struct {
 }
 
 func NewServer(storage string) (*placementSvr, error) {
-	f, err := os.Open(storage)
+	f, err := os.OpenFile(storage, os.O_CREATE|os.O_RDONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
 
-	svr := &placementSvr{}
+	svr := &placementSvr{
+		Placement:     map[pd.GrainIdentity]addr.LogicAddr{},
+		tempPlacement: map[pd.GrainIdentity]*tmpPlacement{},
+		Silos:         map[addr.LogicAddr]*silo{},
+	}
 	decoder := json.NewDecoder(f)
 	err = decoder.Decode(svr)
-	if err != nil {
+	if err != nil && err.Error() != "EOF" {
 		return nil, err
 	}
 	f.Close()
@@ -320,6 +333,8 @@ func (s *placementSvr) Login(sess *netgo.AsynSocket, msg *Message) {
 		s.save()
 	}
 
+	logger.Sugar().Debugf("on login %v seq:%d", req, msg.Seq)
+
 	sess.Send(&Message{Seq: msg.Seq, PayLoad: &LoginResp{}})
 }
 
@@ -342,7 +357,7 @@ func (s *placementSvr) Logout(sess *netgo.AsynSocket, msg *Message) {
 func (s *placementSvr) Heartbeat(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
-	req := msg.PayLoad.(*LoginReq)
+	req := msg.PayLoad.(*HeartbeatReq)
 	if silo, ok := s.Silos[req.Addr]; ok {
 		silo.Metric = req.Metric
 		silo.last = time.Now()
@@ -362,7 +377,10 @@ func (s *placementSvr) Activate(sess *netgo.AsynSocket, msg *Message) {
 		}
 	}
 
+	s.Placement[req.Identity] = req.Addr
+
 	if tmp := s.tempPlacement[req.Identity]; tmp != nil {
+		logger.Sugar().Debug("delete tempPlacement")
 		tmp.timer.Stop()
 		delete(s.tempPlacement, req.Identity)
 	}
@@ -426,7 +444,7 @@ func (s *placementSvr) MarkUnAvaliable(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
 	req := msg.PayLoad.(*MarkUnAvaliableReq)
-	if silo, ok := s.Silos[req.Addr]; !ok {
+	if silo, ok := s.Silos[req.Addr]; ok {
 		silo.Abaliable = false
 		for i := 0; i < len(s.siloArray); i++ {
 			if s.siloArray[i].Addr == req.Addr {
@@ -476,7 +494,7 @@ func (svr *placementSvr) Start(service string) error {
 	if err != nil {
 		return err
 	} else {
-		serve()
+		go serve()
 		return nil
 	}
 }
@@ -526,8 +544,11 @@ func (cli *placementCli) remPending(seq uint32) (fn func(*Message)) {
 }
 
 func (cli *placementCli) onResponse(rsp *Message) {
-	fn := cli.remPending(rsp.Seq)
-	fn(rsp)
+	if fn := cli.remPending(rsp.Seq); fn != nil {
+		fn(rsp)
+	} else {
+		logger.Sugar().Debugf("call %d no context", rsp.Seq)
+	}
 }
 
 func (cli *placementCli) call(ctx context.Context, req *Message) (resp *Message, err error) {
@@ -544,9 +565,12 @@ func (cli *placementCli) call(ctx context.Context, req *Message) (resp *Message,
 
 	c := make(chan *Message)
 
+	//logger.Sugar().Debugf("call seq:%d", req.Seq)
+
 	cli.pending[req.Seq] = func(m *Message) {
 		c <- m
 	}
+
 	cli.session.Send(req)
 	cli.callMtx.Unlock()
 	select {
@@ -559,9 +583,10 @@ func (cli *placementCli) call(ctx context.Context, req *Message) (resp *Message,
 }
 
 func (cli *placementCli) dial() error {
+	//logger.Sugar().Debug("dial")
 	dialer := &net.Dialer{}
-	if conn, err := dialer.Dial("tcp", cli.server); err == nil {
-		return nil
+	if conn, err := dialer.Dial("tcp", cli.server); err != nil {
+		return err
 	} else {
 		cc := &codec{
 			buff: make([]byte, 65535),
@@ -578,6 +603,7 @@ func (cli *placementCli) dial() error {
 			cli.onResponse(packet.(*Message))
 			return nil
 		}).Recv()
+		logger.Sugar().Debug("connect server ok")
 		cli.session = as
 		return nil
 	}
@@ -601,7 +627,7 @@ func (cli *placementCli) Login(ctx context.Context) error {
 
 	_, err := cli.call(ctx, req)
 
-	if err == nil {
+	if err == nil && cli.getMetric != nil {
 		go func() {
 			for {
 				time.Sleep(time.Second * 10)
@@ -610,12 +636,14 @@ func (cli *placementCli) Login(ctx context.Context) error {
 					return
 				default:
 				}
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				cli.call(ctx, &Message{
 					PayLoad: &HeartbeatReq{
 						Addr:   cli.selfAddr,
 						Metric: cli.getMetric(),
 					},
 				})
+				cancel()
 			}
 		}()
 	}
@@ -671,15 +699,15 @@ func (cli *placementCli) Activate(ctx context.Context, identity pd.GrainIdentity
 		return err
 	}
 
-	if resp.PayLoad.(ActivateResp).Addr == cli.selfAddr {
+	if resp.PayLoad.(*ActivateResp).Addr == cli.selfAddr {
 		cli.Lock()
 		defer cli.Unlock()
 		cli.localCache[identity] = placementCache{
-			addr: resp.PayLoad.(ActivateResp).Addr,
+			addr: resp.PayLoad.(*ActivateResp).Addr,
 		}
 		return nil
 	} else {
-		return pd.ErrorRedirect{Addr: resp.PayLoad.(ActivateResp).Addr}
+		return pd.ErrorRedirect{Addr: resp.PayLoad.(*ActivateResp).Addr}
 	}
 }
 
