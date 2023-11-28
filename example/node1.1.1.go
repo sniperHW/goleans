@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"goleans"
-	"goleans/example/grain/user"
+	"goleans/example/grain"
 	"goleans/example/placement"
 	"goleans/pd"
 	"os"
@@ -32,11 +32,19 @@ func main() {
 	pdClient := placement.NewCli(localaddr, *pdAddr)
 	goleans.Start(discoveryCli, localaddr, pdClient, func(gi pd.GrainIdentity) goleans.UserObject {
 		s := strings.Split(string(gi), "@")
-		if len(s) > 1 && s[1] == "User" {
-			u := &user.User{
-				Node: clustergo.GetDefaultNode(),
+		if len(s) > 1 {
+			switch s[1] {
+			case "User":
+				return &grain.User{
+					Node: clustergo.GetDefaultNode(),
+				}
+			case "Boss":
+				return &grain.Boss{
+					Node: clustergo.GetDefaultNode(),
+				}
+			default:
+				return nil
 			}
-			return u
 		} else {
 			return nil
 		}

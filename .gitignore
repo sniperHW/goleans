@@ -1,2 +1,6 @@
 logfile/
 coverage.out
+example/node1.1.1
+example/node1.2.1
+example/pdSvr
+example/discoverySvr

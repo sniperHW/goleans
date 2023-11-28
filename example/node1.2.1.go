@@ -8,11 +8,12 @@ import (
 	"goleans/pd"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
-	"goleans/example/grain/user/rpc/service/echo"
-	"goleans/example/grain/user/rpc/service/test"
+	"goleans/example/grain/rpc/service/echo"
+	"goleans/example/grain/rpc/service/test"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
@@ -37,33 +38,81 @@ func main() {
 
 	go func() {
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			resp, err := echo.Call(ctx, pd.GrainIdentity("sniperHW1@User"), &echo.Request{
-				Msg: "hello sniperHW1",
-			})
-			cancel()
-			if err == nil {
-				l.Sugar().Debug(resp.Msg)
-			} else {
-				l.Sugar().Debug(err)
-			}
-			time.Sleep(time.Second)
+
+			var wait sync.WaitGroup
+			wait.Add(2)
+			begin := time.Now()
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+				resp, err := echo.Call(ctx, pd.GrainIdentity("sniperHW1@User"), &echo.Request{
+					Msg: "hello sniperHW1",
+				})
+				cancel()
+				if err == nil {
+					l.Sugar().Debug(resp.Msg)
+				} else {
+					l.Sugar().Debug(err)
+				}
+				wait.Done()
+			}()
+
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+				resp, err := echo.Call(ctx, pd.GrainIdentity("sniperHW1@User"), &echo.Request{
+					Msg: "hello sniperHW1",
+				})
+				cancel()
+				if err == nil {
+					l.Sugar().Debug(resp.Msg)
+				} else {
+					l.Sugar().Debug(err)
+				}
+				wait.Done()
+			}()
+
+			wait.Wait()
+			//user.Echo阻塞grain，只能顺序执行,因此两次调用耗时>= 4s
+			l.Sugar().Debugf("echo use %v", time.Now().Sub(begin))
 		}
 	}()
 
 	go func() {
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			resp, err := test.Call(ctx, pd.GrainIdentity("sniperHW2@User"), &test.Request{
-				Msg: "hello sniperHW2",
-			})
-			cancel()
-			if err == nil {
-				l.Sugar().Debug(resp.Msg)
-			} else {
-				l.Sugar().Debug(err)
-			}
-			time.Sleep(time.Second)
+			var wait sync.WaitGroup
+			wait.Add(2)
+
+			begin := time.Now()
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+				defer cancel()
+				resp, err := test.Call(ctx, pd.GrainIdentity("sniperHW2@Boss"), &test.Request{
+					Msg: "hello sniperHW2",
+				})
+				if err == nil {
+					l.Sugar().Debugf("%v", resp.Msg)
+				} else {
+					l.Sugar().Debugf("%v", err)
+				}
+				wait.Done()
+			}()
+
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+				defer cancel()
+				resp, err := test.Call(ctx, pd.GrainIdentity("sniperHW2@Boss"), &test.Request{
+					Msg: "hello sniperHW2",
+				})
+				if err == nil {
+					l.Sugar().Debugf("%v", resp.Msg)
+				} else {
+					l.Sugar().Debugf("%v", err)
+				}
+				wait.Done()
+			}()
+
+			wait.Wait()
+			//boss.Test不阻塞grain,可以同时执行多个请求,因此两次调用耗时>= 2s
+			l.Sugar().Debugf("test use %v", time.Now().Sub(begin))
 		}
 	}()
 

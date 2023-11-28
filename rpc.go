@@ -372,7 +372,7 @@ func (c *RPCClient) makeSequence() (seq uint64) {
 	} else {
 		c.nextSequence++
 	}
-	seq = uint64(c.nextSequence)
+	seq = uint64(c.timestamp)<<32 + uint64(c.nextSequence)
 	c.Unlock()
 	return seq
 }
