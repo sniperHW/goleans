@@ -1,5 +1,4 @@
-#!/bin/bash
-
+#!/bin/sh
 function make_proto(){
     if [ ! -d "./service" ];then
         mkdir ./service

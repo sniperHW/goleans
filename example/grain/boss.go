@@ -16,9 +16,9 @@ type Boss struct {
 	Node  *clustergo.Node
 }
 
-func (u *Boss) test(ctx context.Context, replyer *test.Replyer, arg *test.Request) {
+func (u *Boss) ServeTest(ctx context.Context, replyer *test.Replyer, arg *test.TestReq) {
 	u.grain.Await(time.Sleep, time.Second*2) //不会阻塞当前grain，可以继续处理请求
-	replyer.Reply(&test.Response{
+	replyer.Reply(&test.TestRsp{
 		Msg: fmt.Sprintf("test response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grain.Identity, arg.Msg),
 	})
 }
@@ -26,7 +26,7 @@ func (u *Boss) test(ctx context.Context, replyer *test.Replyer, arg *test.Reques
 func (u *Boss) Init(grain *goleans.Grain) error {
 	u.grain = grain
 	//注册rpc方法
-	test.Register(grain, u.test)
+	test.Register(grain, u)
 	return nil
 }
 

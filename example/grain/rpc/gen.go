@@ -22,31 +22,37 @@ type Replyer struct {
 	replyer *goleans.Replyer
 }
 
-func (r *Replyer) Reply(result *Response) {
+func (r *Replyer) Reply(result *{{.Response}}) {
 	r.replyer.Reply(result)
 }
 
-
-func Register(grain *goleans.Grain,fn func(context.Context, *Replyer,*Request)) error {
-	return grain.RegisterMethod({{.Method}}, func(ctx context.Context, r *goleans.Replyer, arg *Request){
-		fn(ctx,&Replyer{replyer:r},arg)
-	})
+type {{.Service}} interface {
+	Serve{{.Service}}(context.Context, *Replyer,*{{.Request}})
 }
 
-func Call(ctx context.Context,identity pd.GrainIdentity,arg *Request) (*Response,error) {
-	var resp Response
+func Register(grain *goleans.Grain,o {{.Service}}) error {
+	return grain.RegisterMethod({{.Method}}, func(ctx context.Context, r *goleans.Replyer, arg *{{.Request}}){
+		o.Serve{{.Service}}(ctx,&Replyer{replyer:r},arg)
+	})	
+}
+
+
+func Call(ctx context.Context,identity pd.GrainIdentity,arg *{{.Request}}) (*{{.Response}},error) {
+	var resp {{.Response}}
 	err := goleans.Call(ctx,identity,{{.Method}},arg,&resp)
 	return &resp,err
 }
 `
 
 type method struct {
-	Name   string
-	Method uint16
+	Name     string
+	Method   uint16
+	Request  string
+	Response string
+	Service  string
 }
 
 var (
-	inputPath  *string
 	outputPath *string
 )
 
@@ -74,7 +80,13 @@ func gen(tmpl *template.Template, name string, code uint16) {
 		return
 	}
 
-	err = tmpl.Execute(f, method{name, code})
+	err = tmpl.Execute(f, method{
+		Name:     name,
+		Method:   code,
+		Request:  fmt.Sprintf("%sReq", strings.Title(name)),
+		Response: fmt.Sprintf("%sRsp", strings.Title(name)),
+		Service:  strings.Title(name),
+	})
 	if err != nil {
 		panic(err)
 	} else {
@@ -84,7 +96,7 @@ func gen(tmpl *template.Template, name string, code uint16) {
 
 func main() {
 
-	inputPath = flag.String("inputPath", "proto", "inputPath")
+	//inputPath = flag.String("inputPath", "proto", "inputPath")
 	outputPath = flag.String("outputPath", "service", "outputPath")
 
 	flag.Parse()

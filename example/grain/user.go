@@ -17,9 +17,9 @@ type User struct {
 	Node  *clustergo.Node
 }
 
-func (u *User) echo(ctx context.Context, replyer *echo.Replyer, arg *echo.Request) {
+func (u *User) ServeEcho(ctx context.Context, replyer *echo.Replyer, arg *echo.EchoReq) {
 	time.Sleep(time.Second * 2) //阻塞当前grain
-	replyer.Reply(&echo.Response{
+	replyer.Reply(&echo.EchoRsp{
 		Msg: fmt.Sprintf("echo response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grain.Identity, arg.Msg),
 	})
 }
@@ -28,7 +28,7 @@ func (u *User) Init(grain *goleans.Grain) error {
 	//从数据库加载数据，初始化User
 	u.grain = grain
 	//注册rpc方法
-	echo.Register(grain, u.echo)
+	echo.Register(grain, u)
 	return nil
 }
 
