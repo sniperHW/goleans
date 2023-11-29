@@ -2,6 +2,7 @@ package goleans
 
 import (
 	"context"
+	"errors"
 	"goleans/pd"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,8 @@ var (
 	GoroutinePoolCap   = 0xFFF           //goroutine池容量,大小必须为2的幂次方-1。
 	GrainGCTime        = time.Minute * 5 //Grain空闲超过这个时间后执行Deactive
 )
+
+var ErrInitUnRetryAbleError = errors.New("unretryable error")
 
 type UserObject interface {
 	Init(*Grain) error

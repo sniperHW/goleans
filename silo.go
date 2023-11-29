@@ -148,7 +148,12 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 
 			if err := grain.userObject.Init(grain); err != nil {
 				logger.Errorf("Create Grain:%s Init error:%e", grain.Identity, err)
-				replyer.Error(ErrCodeRetryAgain)
+				if err == ErrInitUnRetryAbleError {
+					//通告调用方，调用不应再尝试
+					replyer.Error(ErrCodeUserGrainInitError)
+				} else {
+					replyer.Error(ErrCodeRetryAgain)
+				}
 				return
 			} else {
 				grain.state = grain_running
