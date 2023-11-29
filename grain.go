@@ -16,6 +16,7 @@ var (
 	GrainGCTime        = time.Minute * 5 //Grain空闲超过这个时间后执行Deactive
 )
 
+// 对于一些不可重试的错误，Init应该返回ErrInitUnRetryAbleError。
 var ErrInitUnRetryAbleError = errors.New("unretryable error")
 
 type UserObject interface {
