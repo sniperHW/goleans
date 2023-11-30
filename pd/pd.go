@@ -2,6 +2,7 @@ package pd
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/sniperHW/clustergo/addr"
@@ -22,6 +23,9 @@ type ErrorRedirect struct {
 func (e ErrorRedirect) Error() string {
 	return "redirect"
 }
+
+var ErrInvaildIdentity error = errors.New("invaild identity")
+var ErrNoAvaliableSilo error = errors.New("no avaliable silo")
 
 type PlacementDriver interface {
 	//设置Grain地址信息的缓存时间，GetPlacement会将本地Cache作废，强制从pdserver获取一次

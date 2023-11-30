@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,8 +44,9 @@ func InitLogger(l *zap.Logger) {
 }
 
 type LoginReq struct {
-	Addr   addr.LogicAddr
-	Metric pd.Metric
+	Addr      addr.LogicAddr
+	Metric    pd.Metric
+	GrainList []string
 }
 
 type LoginResp struct {
@@ -265,6 +267,7 @@ type silo struct {
 	Addr      addr.LogicAddr
 	Metric    pd.Metric
 	Abaliable bool
+	GrainList []string
 	last      time.Time
 }
 
@@ -279,8 +282,24 @@ type placementSvr struct {
 	Placement     map[pd.GrainIdentity]addr.LogicAddr
 	tempPlacement map[pd.GrainIdentity]*tmpPlacement
 	Silos         map[addr.LogicAddr]*silo
-	siloArray     []*silo //可供分配的silo
 	storage       *os.File
+	siloArray     map[string][]*silo //可供分配的silo
+}
+
+func (s *placementSvr) addAvaliableSilo(grain string, si *silo) {
+	array := s.siloArray[grain]
+	s.siloArray[grain] = append(array, si)
+}
+
+func (s *placementSvr) remAvaliableSilo(grain string, si *silo) {
+	array := s.siloArray[grain]
+	for i := 0; i < len(array); i++ {
+		if array[i].Addr == si.Addr {
+			array[i], array[len(array)-1] = array[len(array)-1], array[i]
+			s.siloArray[grain] = array[:len(s.siloArray)-1]
+			break
+		}
+	}
 }
 
 func NewServer(storage string) (*placementSvr, error) {
@@ -293,6 +312,7 @@ func NewServer(storage string) (*placementSvr, error) {
 		Placement:     map[pd.GrainIdentity]addr.LogicAddr{},
 		tempPlacement: map[pd.GrainIdentity]*tmpPlacement{},
 		Silos:         map[addr.LogicAddr]*silo{},
+		siloArray:     map[string][]*silo{},
 	}
 	decoder := json.NewDecoder(f)
 	err = decoder.Decode(svr)
@@ -303,7 +323,9 @@ func NewServer(storage string) (*placementSvr, error) {
 
 	for _, v := range svr.Silos {
 		if v.Abaliable {
-			svr.siloArray = append(svr.siloArray, v)
+			for _, grain := range v.GrainList {
+				svr.addAvaliableSilo(grain, v)
+			}
 		}
 	}
 
@@ -324,12 +346,16 @@ func (s *placementSvr) Login(sess *netgo.AsynSocket, msg *Message) {
 	defer s.Unlock()
 	req := msg.PayLoad.(*LoginReq)
 	if _, ok := s.Silos[req.Addr]; !ok {
-		s.Silos[req.Addr] = &silo{
+		si := &silo{
 			Addr:      req.Addr,
 			Metric:    req.Metric,
+			GrainList: req.GrainList,
 			Abaliable: true,
 		}
-		s.siloArray = append(s.siloArray, s.Silos[req.Addr])
+		s.Silos[req.Addr] = si
+		for _, grain := range req.GrainList {
+			s.addAvaliableSilo(grain, si)
+		}
 		s.save()
 	}
 
@@ -342,15 +368,15 @@ func (s *placementSvr) Logout(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
 	req := msg.PayLoad.(*LogoutReq)
-	delete(s.Silos, req.Addr)
-	for i := 0; i < len(s.siloArray); i++ {
-		if s.siloArray[i].Addr == req.Addr {
-			s.siloArray[i], s.siloArray[len(s.siloArray)-1] = s.siloArray[len(s.siloArray)-1], s.siloArray[i]
-			s.siloArray = s.siloArray[:len(s.siloArray)-1]
-			break
+	if si := s.Silos[req.Addr]; si != nil {
+		delete(s.Silos, req.Addr)
+		if si.Abaliable {
+			for _, grain := range si.GrainList {
+				s.remAvaliableSilo(grain, si)
+			}
 		}
+		s.save()
 	}
-	s.save()
 	sess.Send(&Message{Seq: msg.Seq, PayLoad: &LogoutResp{}})
 }
 
@@ -419,8 +445,18 @@ func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
 		return
 	}
 
-	if len(s.siloArray) > 0 {
-		silo := s.siloArray[int(rand.Int31())%len(s.siloArray)]
+	t := strings.Split(string(req.Identity), "@")
+
+	if len(t) < 2 {
+		err := "invaild identity"
+		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Err: &err}})
+		return
+	}
+
+	siloArray := s.siloArray[t[1]]
+
+	if len(siloArray) > 0 {
+		silo := siloArray[int(rand.Int31())%len(siloArray)]
 		tmp := &tmpPlacement{
 			identity: req.Identity,
 			addr:     silo.Addr,
@@ -435,7 +471,7 @@ func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
 		s.tempPlacement[req.Identity] = tmp
 		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: silo.Addr}})
 	} else {
-		err := "no avaliable silo for grain"
+		err := "no avaliable silo"
 		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Err: &err}})
 	}
 }
@@ -446,12 +482,8 @@ func (s *placementSvr) MarkUnAvaliable(sess *netgo.AsynSocket, msg *Message) {
 	req := msg.PayLoad.(*MarkUnAvaliableReq)
 	if silo, ok := s.Silos[req.Addr]; ok {
 		silo.Abaliable = false
-		for i := 0; i < len(s.siloArray); i++ {
-			if s.siloArray[i].Addr == req.Addr {
-				s.siloArray[i], s.siloArray[len(s.siloArray)-1] = s.siloArray[len(s.siloArray)-1], s.siloArray[i]
-				s.siloArray = s.siloArray[:len(s.siloArray)-1]
-				break
-			}
+		for _, grain := range silo.GrainList {
+			s.remAvaliableSilo(grain, silo)
 		}
 		s.save()
 	}
@@ -617,11 +649,12 @@ func (cli *placementCli) SetCacheTime(d time.Duration) {
 	cli.cacheTime = d
 }
 
-func (cli *placementCli) Login(ctx context.Context, _ []string) error {
+func (cli *placementCli) Login(ctx context.Context, grainList []string) error {
 	req := &Message{
 		PayLoad: &LoginReq{
-			Addr:   cli.selfAddr,
-			Metric: cli.getMetric(),
+			Addr:      cli.selfAddr,
+			Metric:    cli.getMetric(),
+			GrainList: grainList,
 		},
 	}
 
@@ -751,7 +784,14 @@ func (cli *placementCli) GetPlacement(ctx context.Context, identity pd.GrainIden
 
 	getplacementResp := resp.PayLoad.(*GetPlacementResp)
 	if getplacementResp.Err != nil {
-		return addr.LogicAddr(0), errors.New(*getplacementResp.Err)
+		switch *getplacementResp.Err {
+		case "invaild identity":
+			return addr.LogicAddr(0), pd.ErrInvaildIdentity
+		case "no avaliable silo":
+			return addr.LogicAddr(0), pd.ErrNoAvaliableSilo
+		default:
+			return addr.LogicAddr(0), errors.New(*getplacementResp.Err)
+		}
 	} else {
 		return getplacementResp.Addr, nil
 	}
