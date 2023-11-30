@@ -26,8 +26,7 @@ func Register(grain *goleans.Grain,o Echo) error {
 }
 
 
-func Call(ctx context.Context,identity pd.GrainIdentity,arg *EchoReq) (*EchoRsp,error) {
-	var resp EchoRsp
-	err := goleans.Call(ctx,identity,2,arg,&resp)
-	return &resp,err
+func Call(ctx context.Context,identity pd.GrainIdentity,arg *EchoReq) (resp EchoRsp,err error) {
+	err = goleans.Call(ctx,identity,2,arg,&resp)
+	return resp,err
 }

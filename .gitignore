@@ -1,6 +1,10 @@
 logfile/
 coverage.out
-example/node1.1.1
-example/node1.2.1
-example/pdSvr
-example/discoverySvr
+example/test1/node1.1.1
+example/test1/node1.2.1
+example/test1/pdSvr
+example/test1/discoverySvr
+example/test2/gameserver
+example/test2/gateway
+example/test2/pdSvr
+example/test2/discoverySvr
