@@ -29,7 +29,8 @@ type PlacementDriver interface {
 
 	SetGetMetric(func() Metric)
 
-	Login(context.Context) error
+	//grainList []string,Silo支持的Grain类型
+	Login(context.Context, []string) error
 
 	Logout(context.Context) error
 

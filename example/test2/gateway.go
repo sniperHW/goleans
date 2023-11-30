@@ -64,7 +64,7 @@ func main() {
 		}
 	})
 
-	goleans.Start(discoveryCli, localaddr, pdClient, nil) //不作为silo,工厂函数填nil
+	goleans.Start(discoveryCli, localaddr, pdClient) //不作为silo
 
 	_, serve, _ := netgo.ListenTCP("tcp", "127.0.0.1:18113", func(conn *net.TCPConn) {
 		go func() {

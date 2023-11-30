@@ -22,7 +22,35 @@ var (
 	started   atomic.Bool
 )
 
-func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, siloObjectFactory func(pd.GrainIdentity) UserObject) error {
+// 不作为Silo启动
+func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver) error {
+	ok := false
+	startOnce.Do(func() {
+		ok = true
+	})
+	if ok {
+		err := clustergo.Start(discovery, localAddr)
+		if err != nil {
+			return err
+		}
+		node := clustergo.GetDefaultNode()
+		rpcClient = NewRPCClient(node, placementDriver)
+		node.RegisterBinrayHandler(Actor_response, func(from addr.LogicAddr, cmd uint16, msg []byte) {
+			resp := ResponseMsg{}
+			if err := resp.Decode(msg); err != nil {
+				logger.Error(err)
+			} else {
+				rpcClient.OnRPCResponse(context.TODO(), &resp)
+			}
+		})
+
+		started.Store(true)
+	}
+	return nil
+}
+
+// 作为Silo启动
+func StartSilo(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []string, siloObjectFactory func(pd.GrainIdentity) UserObject) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
@@ -39,7 +67,7 @@ func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDri
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
 
-			s, err := newSilo(ctx, placementDriver, node, siloObjectFactory)
+			s, err := newSilo(ctx, placementDriver, node, grainList, siloObjectFactory)
 			if err != nil {
 				clustergo.Stop()
 				return err

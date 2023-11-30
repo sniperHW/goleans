@@ -187,7 +187,7 @@ func (pdc *placementDriverClient) SetGetMetric(getMetric func() pd.Metric) {
 	pdc.getMetric = getMetric
 }
 
-func (pdc *placementDriverClient) Login(ctx context.Context) (err error) {
+func (pdc *placementDriverClient) Login(ctx context.Context, _ []string) (err error) {
 	pdc.driver.Login(pdc.selfAddr, pdc.getMetric())
 	return nil
 }
@@ -274,7 +274,7 @@ func init() {
 }
 
 func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
-	silo, _ := newSilo(context.Background(), pdc, node, factory)
+	silo, _ := newSilo(context.Background(), pdc, node, []string{}, factory)
 	node.RegisterBinrayHandler(Actor_request, func(from addr.LogicAddr, cmd uint16, msg []byte) {
 		req := RequestMsg{}
 		if err := req.Decode(msg); err != nil {
@@ -317,7 +317,7 @@ func TestGoleans(t *testing.T) {
 		selfAddr:   node1Addr.LogicAddr(),
 	}
 
-	err := Start(localDiscovery, node1Addr.LogicAddr(), pdClient1, factory)
+	err := StartSilo(localDiscovery, node1Addr.LogicAddr(), pdClient1, []string{}, factory)
 	if err != nil {
 		panic(err)
 	}

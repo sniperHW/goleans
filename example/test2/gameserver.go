@@ -30,7 +30,7 @@ func main() {
 	localaddr, _ := addr.MakeLogicAddr("1.1.1")
 	discoveryCli := discovery.NewClient(*discoveryAddr)
 	pdClient := placement.NewCli(localaddr, *pdAddr)
-	goleans.Start(discoveryCli, localaddr, pdClient, func(gi pd.GrainIdentity) goleans.UserObject {
+	goleans.StartSilo(discoveryCli, localaddr, pdClient, []string{"User"}, func(gi pd.GrainIdentity) goleans.UserObject {
 		s := strings.Split(string(gi), "@")
 		if len(s) > 1 {
 			switch s[1] {

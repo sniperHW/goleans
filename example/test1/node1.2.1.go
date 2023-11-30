@@ -34,7 +34,7 @@ func main() {
 	localaddr, _ := addr.MakeLogicAddr("1.2.1")
 	discoveryCli := discovery.NewClient(*discoveryAddr)
 	pdClient := placement.NewCli(localaddr, *pdAddr)
-	goleans.Start(discoveryCli, localaddr, pdClient, nil) //不作为silo,工厂函数填nil
+	goleans.Start(discoveryCli, localaddr, pdClient) //不作为silo
 
 	go func() {
 		for {

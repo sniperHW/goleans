@@ -24,6 +24,7 @@ func GetLogger() Logger {
 type Silo struct {
 	sync.RWMutex
 	grains            map[pd.GrainIdentity]*Grain
+	grainList         []string
 	node              *clustergo.Node
 	placementDriver   pd.PlacementDriver
 	userObjectFactory func(pd.GrainIdentity) UserObject
@@ -31,17 +32,18 @@ type Silo struct {
 	stoped            atomic.Bool
 }
 
-func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, userObjectFactory func(pd.GrainIdentity) UserObject) (*Silo, error) {
+func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, grainList []string, userObjectFactory func(pd.GrainIdentity) UserObject) (*Silo, error) {
 	s := &Silo{
 		grains:            map[pd.GrainIdentity]*Grain{},
 		node:              node,
 		placementDriver:   placementDriver,
 		userObjectFactory: userObjectFactory,
+		grainList:         grainList,
 	}
 
 	placementDriver.SetGetMetric(s.getMetric)
 
-	if err := placementDriver.Login(ctx); err != nil {
+	if err := placementDriver.Login(ctx, grainList); err != nil {
 		return nil, err
 	} else {
 		return s, nil

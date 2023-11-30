@@ -617,7 +617,7 @@ func (cli *placementCli) SetCacheTime(d time.Duration) {
 	cli.cacheTime = d
 }
 
-func (cli *placementCli) Login(ctx context.Context) error {
+func (cli *placementCli) Login(ctx context.Context, _ []string) error {
 	req := &Message{
 		PayLoad: &LoginReq{
 			Addr:   cli.selfAddr,
