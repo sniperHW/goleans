@@ -17,6 +17,10 @@ func InitLogger(l Logger) {
 	logger = l
 }
 
+func GetLogger() Logger {
+	return logger
+}
+
 type Silo struct {
 	sync.RWMutex
 	grains            map[pd.GrainIdentity]*Grain
@@ -80,7 +84,7 @@ func (s *Silo) Stop() {
 
 func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *RequestMsg) {
 
-	logger.Debugf("OnRPCRequest from:%s method:%d", from.String(), req.Method)
+	logger.Debugf("OnRPCRequest from:%s method:%d seq:%d", from.String(), req.Method, req.Seq)
 
 	replyer := &Replyer{
 		seq:      req.Seq,

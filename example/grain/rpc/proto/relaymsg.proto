@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+option go_package = "service/relaymsg";
+
+message RelaymsgReq {
+	int32 gateAddr   = 1;
+    int64 gateUserID = 2;
+    bytes msg = 3;
+}
+
+message RelaymsgRsp {
+    bool ok = 1;
+}

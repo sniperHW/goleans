@@ -439,8 +439,8 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 				respReceiver: ret,
 				respC:        make(chan error),
 			}
-			pending.Store(reqMessage.Seq, callCtx)
 			for {
+				pending.Store(reqMessage.Seq, callCtx)
 				var pdErr error
 				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
 				if err != nil {

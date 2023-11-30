@@ -8,6 +8,9 @@ type MethodDefine struct {
 var Defines []MethodDefine = []MethodDefine{
 	{Code: 1, Proto: "test.proto"},
 	{Code: 2, Proto: "echo.proto"},
+	{Code: 3, Proto: "login.proto"},
+	{Code: 4, Proto: "relaymsg.proto"},
+	{Code: 5, Proto: "logout.proto"},
 }
 
 func init() {

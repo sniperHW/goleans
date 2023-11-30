@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+option go_package = "service/login";
+
+message LoginReq {
+	int32 gateAddr   = 1;
+    int64 gateUserID = 2;
+}
+
+message LoginRsp {
+    bool ok = 1;
+}
