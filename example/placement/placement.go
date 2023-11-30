@@ -37,6 +37,11 @@ const (
 	mark_unavaliableResp
 )
 
+const (
+	ErrInvaildIdentity = iota + 1
+	ErrNoAvaliableSilo
+)
+
 var logger *zap.Logger
 
 func InitLogger(l *zap.Logger) {
@@ -89,8 +94,8 @@ type GetPlacementReq struct {
 }
 
 type GetPlacementResp struct {
-	Err  *string
-	Addr addr.LogicAddr
+	Addr    addr.LogicAddr
+	ErrCode int
 }
 
 type MarkUnAvaliableReq struct {
@@ -121,7 +126,6 @@ func (cc *codec) Encode(buffs net.Buffers, o interface{}) (net.Buffers, int) {
 		} else {
 			b := make([]byte, 0, 12)
 			b = buffer.AppendUint32(b, uint32(len(buff)+4+4))
-			//logger.Sugar().Debugf("encode seq:%d", o.Seq)
 			b = buffer.AppendUint32(b, o.Seq)
 			switch o.PayLoad.(type) {
 			case *LoginReq:
@@ -448,8 +452,7 @@ func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
 	t := strings.Split(string(req.Identity), "@")
 
 	if len(t) < 2 {
-		err := "invaild identity"
-		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Err: &err}})
+		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{ErrCode: ErrInvaildIdentity}})
 		return
 	}
 
@@ -471,8 +474,7 @@ func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
 		s.tempPlacement[req.Identity] = tmp
 		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: silo.Addr}})
 	} else {
-		err := "no avaliable silo"
-		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Err: &err}})
+		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{ErrCode: ErrNoAvaliableSilo}})
 	}
 }
 
@@ -597,8 +599,6 @@ func (cli *placementCli) call(ctx context.Context, req *Message) (resp *Message,
 
 	c := make(chan *Message)
 
-	//logger.Sugar().Debugf("call seq:%d", req.Seq)
-
 	cli.pending[req.Seq] = func(m *Message) {
 		c <- m
 	}
@@ -615,7 +615,6 @@ func (cli *placementCli) call(ctx context.Context, req *Message) (resp *Message,
 }
 
 func (cli *placementCli) dial() error {
-	//logger.Sugar().Debug("dial")
 	dialer := &net.Dialer{}
 	if conn, err := dialer.Dial("tcp", cli.server); err != nil {
 		return err
@@ -783,16 +782,12 @@ func (cli *placementCli) GetPlacement(ctx context.Context, identity pd.GrainIden
 	}
 
 	getplacementResp := resp.PayLoad.(*GetPlacementResp)
-	if getplacementResp.Err != nil {
-		switch *getplacementResp.Err {
-		case "invaild identity":
-			return addr.LogicAddr(0), pd.ErrInvaildIdentity
-		case "no avaliable silo":
-			return addr.LogicAddr(0), pd.ErrNoAvaliableSilo
-		default:
-			return addr.LogicAddr(0), errors.New(*getplacementResp.Err)
-		}
-	} else {
+	switch getplacementResp.ErrCode {
+	case ErrInvaildIdentity:
+		return addr.LogicAddr(0), pd.ErrInvaildIdentity
+	case ErrNoAvaliableSilo:
+		return addr.LogicAddr(0), pd.ErrNoAvaliableSilo
+	default:
 		return getplacementResp.Addr, nil
 	}
 }
