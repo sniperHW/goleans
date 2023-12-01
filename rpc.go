@@ -384,7 +384,7 @@ func (c *RPCClient) makeSequence() (seq uint64) {
 	return seq
 }
 
-func (c *RPCClient) OnRPCResponse(ctx context.Context, resp *ResponseMsg) {
+func (c *RPCClient) OnRPCResponse(resp *ResponseMsg) {
 	if ctx, ok := c.pendingCall[int(resp.Seq)%len(c.pendingCall)].LoadAndDelete(resp.Seq); ok {
 		ctx.(*callContext).callOnResponse(resp)
 	} else {

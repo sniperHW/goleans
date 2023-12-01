@@ -33,13 +33,12 @@ var (
 
 type Silo struct {
 	sync.RWMutex
-	grains map[pd.GrainIdentity]*Grain
-	//grainList         map[string]GrainCfg
-	node            *clustergo.Node
-	placementDriver pd.PlacementDriver
-	//userObjectFactory func(string) UserObject
-	startOnce sync.Once
-	stoped    atomic.Bool
+	grains            map[pd.GrainIdentity]*Grain
+	grainList         map[string]GrainCfg
+	node              *clustergo.Node
+	placementDriver   pd.PlacementDriver
+	userObjectFactory func(string) UserObject
+	stoped            atomic.Bool
 }
 
 func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, grainList []GrainCfg, userObjectFactory func(string) UserObject) (*Silo, error) {
