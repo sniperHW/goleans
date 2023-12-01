@@ -32,6 +32,10 @@ const (
 	Actor_notify_redirect = 11313
 )
 
+var (
+	RetryInterval = 100 * time.Millisecond //遇到ErrCodeRetryAgain错误时的重试间隔
+)
+
 const (
 	ErrCodeOk = iota
 	ErrCodeMethodCallPanic
@@ -41,6 +45,7 @@ const (
 	ErrCodeUserGrainInitError
 	ErrCodeRedirect
 	ErrCodeRetryAgain
+	ErrCodeInvaildIdentity
 )
 
 var (
@@ -54,6 +59,7 @@ var (
 	ErrCallGrainInit       = errors.New("user Grain Init Error")
 	ErrCallRedirect        = errors.New("grain placement Redirect")
 	ErrCallRetry           = errors.New("retry again")
+	ErrCallInvaildIdentity = errors.New("invaild grain identity")
 )
 
 var errDesc []error = []error{
@@ -65,6 +71,7 @@ var errDesc []error = []error{
 	ErrCallGrainInit,
 	ErrCallRedirect,
 	ErrCallRetry,
+	ErrCallInvaildIdentity,
 }
 
 func getDescByErrCode(code uint16) error {
@@ -458,7 +465,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 							}
 						case error:
 							if err == ErrCallRetry {
-								time.Sleep(time.Millisecond * 10)
+								time.Sleep(RetryInterval)
 							} else {
 								return err
 							}
@@ -492,6 +499,9 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 				select {
 				case <-ctx.Done():
 					pending.Delete(reqMessage.Seq)
+					if err == ErrCallRetry {
+						return err
+					}
 					if pdErr != nil {
 						logger.Errorf("call grain:%s timeout with pd error:%v", identity, pdErr)
 					}

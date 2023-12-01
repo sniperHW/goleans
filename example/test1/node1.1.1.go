@@ -5,10 +5,8 @@ import (
 	"goleans"
 	"goleans/example/grain"
 	"goleans/example/placement"
-	"goleans/pd"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/sniperHW/clustergo"
@@ -30,22 +28,26 @@ func main() {
 	localaddr, _ := addr.MakeLogicAddr("1.1.1")
 	discoveryCli := discovery.NewClient(*discoveryAddr)
 	pdClient := placement.NewCli(localaddr, *pdAddr)
-	goleans.StartSilo(discoveryCli, localaddr, pdClient, []string{"User", "Boss"}, func(gi pd.GrainIdentity) goleans.UserObject {
-		s := strings.Split(string(gi), "@")
-		if len(s) > 1 {
-			switch s[1] {
-			case "User":
-				return &grain.User{
-					Node: clustergo.GetDefaultNode(),
-				}
-			case "Boss":
-				return &grain.Boss{
-					Node: clustergo.GetDefaultNode(),
-				}
-			default:
-				return nil
+	goleans.StartSilo(discoveryCli, localaddr, pdClient, []goleans.GrainCfg{
+		{
+			Type:       "User",
+			MailboxCap: 32,
+		},
+		{
+			Type:       "Boss",
+			MailboxCap: 32,
+		},
+	}, func(grainType string) goleans.UserObject {
+		switch grainType {
+		case "User":
+			return &grain.User{
+				Node: clustergo.GetDefaultNode(),
 			}
-		} else {
+		case "Boss":
+			return &grain.Boss{
+				Node: clustergo.GetDefaultNode(),
+			}
+		default:
 			return nil
 		}
 	})

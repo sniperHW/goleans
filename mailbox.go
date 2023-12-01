@@ -37,6 +37,7 @@ type Mailbox struct {
 }
 
 var ErrMailBoxClosed error = errors.New("mailbox closed")
+var ErrMailBoxFull error = errors.New("mailbox full")
 
 func (m *Mailbox) PushTask(ctx context.Context, fn func()) error {
 	if m.closed == 1 {
@@ -49,6 +50,21 @@ func (m *Mailbox) PushTask(ctx context.Context, fn func()) error {
 			return ErrMailBoxClosed
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+	}
+}
+
+func (m *Mailbox) PushTaskNoWait(fn func()) error {
+	if m.closed == 1 {
+		return ErrMailBoxClosed
+	} else {
+		select {
+		case m.taskQueue <- fn:
+			return nil
+		case <-m.die:
+			return ErrMailBoxClosed
+		default:
+			return ErrMailBoxFull
 		}
 	}
 }

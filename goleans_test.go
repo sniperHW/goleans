@@ -263,7 +263,7 @@ func (u *User) Deactivate() error {
 	return nil
 }
 
-func factory(identity pd.GrainIdentity) UserObject {
+func factory(grainType string) UserObject {
 	return &User{}
 }
 
@@ -274,7 +274,12 @@ func init() {
 }
 
 func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
-	silo, _ := newSilo(context.Background(), pdc, node, []string{}, factory)
+	silo, _ := newSilo(context.Background(), pdc, node, []GrainCfg{
+		{
+			Type:       "User",
+			MailboxCap: 32,
+		},
+	}, factory)
 	node.RegisterBinrayHandler(Actor_request, func(from addr.LogicAddr, cmd uint16, msg []byte) {
 		req := RequestMsg{}
 		if err := req.Decode(msg); err != nil {
@@ -317,7 +322,12 @@ func TestGoleans(t *testing.T) {
 		selfAddr:   node1Addr.LogicAddr(),
 	}
 
-	err := StartSilo(localDiscovery, node1Addr.LogicAddr(), pdClient1, []string{}, factory)
+	err := StartSilo(localDiscovery, node1Addr.LogicAddr(), pdClient1, []GrainCfg{
+		{
+			Type:       "User",
+			MailboxCap: 32,
+		},
+	}, factory)
 	if err != nil {
 		panic(err)
 	}

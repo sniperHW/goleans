@@ -3,6 +3,7 @@ package goleans
 import (
 	"context"
 	"goleans/pd"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,29 +22,41 @@ func GetLogger() Logger {
 	return logger
 }
 
+type GrainCfg struct {
+	Type       string
+	MailboxCap int
+}
+
 type Silo struct {
 	sync.RWMutex
 	grains            map[pd.GrainIdentity]*Grain
-	grainList         []string
+	grainList         map[string]GrainCfg
 	node              *clustergo.Node
 	placementDriver   pd.PlacementDriver
-	userObjectFactory func(pd.GrainIdentity) UserObject
+	userObjectFactory func(string) UserObject
 	startOnce         sync.Once
 	stoped            atomic.Bool
 }
 
-func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, grainList []string, userObjectFactory func(pd.GrainIdentity) UserObject) (*Silo, error) {
+func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, grainList []GrainCfg, userObjectFactory func(string) UserObject) (*Silo, error) {
 	s := &Silo{
 		grains:            map[pd.GrainIdentity]*Grain{},
 		node:              node,
 		placementDriver:   placementDriver,
 		userObjectFactory: userObjectFactory,
-		grainList:         grainList,
+		grainList:         map[string]GrainCfg{},
 	}
 
 	placementDriver.SetGetMetric(s.getMetric)
 
-	if err := placementDriver.Login(ctx, grainList); err != nil {
+	gl := []string{}
+
+	for _, v := range grainList {
+		s.grainList[v.Type] = v
+		gl = append(gl, v.Type)
+	}
+
+	if err := placementDriver.Login(ctx, gl); err != nil {
 		return nil, err
 	} else {
 		return s, nil
@@ -103,15 +116,24 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 
 	identity := pd.GrainIdentity(req.To)
 
+	t := strings.Split(string(identity), "@")
+
+	if len(t) < 2 {
+		replyer.Error(ErrCodeInvaildIdentity)
+		return
+	}
+
+	grainType := t[1]
+
 	s.Lock()
 	grain, ok := s.grains[identity]
 	if !ok {
-		grain = newGrain(s, identity)
+		grain = newGrain(s, identity, grainType)
 		s.grains[identity] = grain
 	}
 	s.Unlock()
 	grain.lastRequest.Store(time.Now())
-	err := grain.AddTask(ctx, func() {
+	err := grain.AddTaskNoWait(func() {
 		if grain.stoped {
 			//silo正在停止
 			replyer.Redirect(0)
@@ -142,7 +164,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 
 		if grain.state == grain_activated {
 			if grain.userObject == nil {
-				if userObj := s.userObjectFactory(grain.Identity); nil == userObj {
+				if userObj := s.userObjectFactory(grainType); nil == userObj {
 					logger.Errorf("Create Grain:%s Failed", grain.Identity)
 					grain.deactive(nil)
 					replyer.Redirect(addr.LogicAddr(0))
@@ -179,5 +201,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 
 	if err == ErrMailBoxClosed {
 		replyer.Redirect(addr.LogicAddr(0))
+	} else if err == ErrMailBoxFull {
+		replyer.Error(ErrCodeRetryAgain)
 	}
 }

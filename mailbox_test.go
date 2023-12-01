@@ -36,7 +36,7 @@ func BenchmarkChannel(b *testing.B) {
 
 func BenchmarkMailbox(b *testing.B) {
 	box := &Mailbox{
-		taskQueue:  make(chan func(), GrainTaskQueueCap),
+		taskQueue:  make(chan func(), 32),
 		awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
 		die:        make(chan struct{}),
 		closeCh:    make(chan struct{}),
@@ -58,7 +58,7 @@ func BenchmarkMailbox(b *testing.B) {
 
 func BenchmarkAwait(b *testing.B) {
 	box := &Mailbox{
-		taskQueue:  make(chan func(), GrainTaskQueueCap),
+		taskQueue:  make(chan func(), 32),
 		awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
 		die:        make(chan struct{}),
 		closeCh:    make(chan struct{}),
@@ -82,7 +82,7 @@ func BenchmarkAwait(b *testing.B) {
 func TestMailbox(t *testing.T) {
 	{
 		box := &Mailbox{
-			taskQueue:  make(chan func(), GrainTaskQueueCap),
+			taskQueue:  make(chan func(), 32),
 			awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
 			die:        make(chan struct{}),
 			closeCh:    make(chan struct{}),
@@ -103,7 +103,7 @@ func TestMailbox(t *testing.T) {
 
 	{
 		box := &Mailbox{
-			taskQueue:  make(chan func(), GrainTaskQueueCap),
+			taskQueue:  make(chan func(), 32),
 			awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
 			die:        make(chan struct{}),
 			closeCh:    make(chan struct{}),
@@ -127,7 +127,7 @@ func TestMailbox(t *testing.T) {
 func TestAwait(t *testing.T) {
 
 	box := &Mailbox{
-		taskQueue:  make(chan func(), GrainTaskQueueCap),
+		taskQueue:  make(chan func(), 32),
 		awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
 		die:        make(chan struct{}),
 		closeCh:    make(chan struct{}),

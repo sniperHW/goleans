@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	GrainTaskQueueCap  = 256 //Grain任务队列大小，队列满时调用Grain.AddTask将会阻塞
+	GrainMailboxCap    = 256 //Grain任务队列大小，队列满时调用Grain.AddTask将会阻塞
 	GrainAwakeQueueCap = 64  //Grain Await队列大小，队列满时Await返回时将阻塞
 	GrainTickInterval  = time.Second * 30
 	GoroutinePoolCap   = 0xFFF           //goroutine池容量,大小必须为2的幂次方-1。
@@ -43,13 +43,19 @@ type Grain struct {
 	stoped      bool
 }
 
-func newGrain(silo *Silo, identity pd.GrainIdentity) *Grain {
+func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
+
+	grainCfg, ok := silo.grainList[grainType]
+	if !ok {
+		return nil
+	}
+
 	grain := &Grain{
 		silo:     silo,
 		Identity: identity,
 		methods:  map[uint16]*methodCaller{},
 		mailbox: &Mailbox{
-			taskQueue:  make(chan func(), GrainTaskQueueCap),
+			taskQueue:  make(chan func(), grainCfg.MailboxCap),
 			awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
 			die:        make(chan struct{}),
 			closeCh:    make(chan struct{}),
@@ -67,6 +73,10 @@ func (grain *Grain) GetIdentity() pd.GrainIdentity {
 
 func (grain *Grain) AddTask(ctx context.Context, task func()) error {
 	return grain.mailbox.PushTask(ctx, task)
+}
+
+func (grain *Grain) AddTaskNoWait(task func()) error {
+	return grain.mailbox.PushTaskNoWait(task)
 }
 
 func (grain *Grain) Await(fn interface{}, args ...interface{}) (ret []interface{}) {

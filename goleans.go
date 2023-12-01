@@ -50,7 +50,7 @@ func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDri
 }
 
 // 作为Silo启动
-func StartSilo(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []string, siloObjectFactory func(pd.GrainIdentity) UserObject) error {
+func StartSilo(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []GrainCfg, siloObjectFactory func(string) UserObject) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
