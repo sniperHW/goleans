@@ -415,11 +415,14 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					if pdErr != nil {
 						logger.Errorf("call grain:%s timeout with pd error:%v", identity, pdErr)
 					}
-					switch ctx.Err() {
+					err = ctx.Err()
+					switch err {
 					case context.Canceled:
 						return ErrCallCancel
-					default:
+					case context.DeadlineExceeded:
 						return ErrCallTimeout
+					default:
+						return err
 					}
 				default:
 				}
@@ -460,14 +463,14 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 						}
 					case <-ctx.Done():
 						pending.Delete(reqMessage.Seq)
-						switch ctx.Err() {
+						err = ctx.Err()
+						switch err {
 						case context.Canceled:
-							return errors.New("canceled")
+							return ErrCallCancel
 						case context.DeadlineExceeded:
-							c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
-							return errors.New("timeout")
+							return ErrCallTimeout
 						default:
-							return errors.New("unknow")
+							return err
 						}
 					}
 				} else {
@@ -491,11 +494,14 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					if pdErr != nil {
 						logger.Errorf("call grain:%s timeout with pd error:%v", identity, pdErr)
 					}
-					switch ctx.Err() {
+					err = ctx.Err()
+					switch err {
 					case context.Canceled:
 						return ErrCallCancel
-					default:
+					case context.DeadlineExceeded:
 						return ErrCallTimeout
+					default:
+						return err
 					}
 				default:
 				}
