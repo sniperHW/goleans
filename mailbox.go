@@ -2,7 +2,6 @@ package goleans
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -35,9 +34,6 @@ type Mailbox struct {
 	awaitCount int32
 	closeCh    chan struct{}
 }
-
-var ErrMailBoxClosed error = errors.New("mailbox closed")
-var ErrMailBoxFull error = errors.New("mailbox full")
 
 func (m *Mailbox) PushTask(ctx context.Context, fn func()) error {
 	if m.closed == 1 {

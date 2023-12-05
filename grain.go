@@ -2,7 +2,6 @@ package goleans
 
 import (
 	"context"
-	"errors"
 	"goleans/pd"
 	"sync/atomic"
 	"time"
@@ -16,9 +15,12 @@ var (
 	GrainGCTime        = time.Minute * 5 //Grain空闲超过这个时间后执行Deactive
 )
 
-// 对于一些不可重试的错误，Init应该返回ErrInitUnRetryAbleError。
-var ErrInitUnRetryAbleError = errors.New("unretryable error")
-
+/*
+ *  对不可重试的错误，Init必须返回ErrInitUnRetryAbleError。
+ *  例如Account对象，它代表玩家的账号，玩家首先要创建账号之后才能接收请求，对于一个不存在的Account对象，当它
+ *  接收到请求被创建出来，执行Init。此时需要从数据库读取用户数据执行初始化，因为Account没有创建过，所以在数据库中不存在相关记录
+ *  此时应该返回ErrInitUnRetryAbleError通知框架层执行正确的逻辑（某些对象的行为可能是不存在数据库记录就插入一条记录）
+ */
 type UserObject interface {
 	Init(*Grain) error
 	Deactivate() error
