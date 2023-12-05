@@ -8,11 +8,11 @@ import (
 )
 
 var (
-	GrainMailboxCap    = 256 //Grain任务队列大小，队列满时调用Grain.AddTask将会阻塞
-	GrainAwakeQueueCap = 64  //Grain Await队列大小，队列满时Await返回时将阻塞
-	GrainTickInterval  = time.Second * 30
-	GoroutinePoolCap   = 0xFFF           //goroutine池容量,大小必须为2的幂次方-1。
-	GrainGCTime        = time.Minute * 5 //Grain空闲超过这个时间后执行Deactive
+	GrainMailboxCap     = 256 //Grain任务队列大小，队列满时调用Grain.AddTask将会阻塞
+	GrainAwakeQueueCap  = 64  //Grain Await队列大小，队列满时Await返回时将阻塞
+	GrainTickInterval   = time.Second * 30
+	GoroutinePoolCap    = 0xFFF           //goroutine池容量,大小必须为2的幂次方-1。
+	DefaultDeactiveTime = time.Minute * 5 //Grain空闲超过这个时间后执行Deactive
 )
 
 /*
@@ -35,14 +35,15 @@ const (
 )
 
 type Grain struct {
-	mailbox     *Mailbox
-	Identity    pd.GrainIdentity
-	methods     map[uint16]*methodCaller
-	userObject  UserObject
-	lastRequest atomic.Value
-	silo        *Silo
-	state       int
-	stoped      bool
+	mailbox      *Mailbox
+	Identity     pd.GrainIdentity
+	methods      map[uint16]*methodCaller
+	userObject   UserObject
+	lastRequest  atomic.Value
+	silo         *Silo
+	state        int
+	stoped       bool
+	deactiveTime time.Duration
 }
 
 func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
@@ -62,11 +63,16 @@ func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
 			die:        make(chan struct{}),
 			closeCh:    make(chan struct{}),
 		},
+		deactiveTime: DefaultDeactiveTime,
 	}
 	grain.lastRequest.Store(time.Now())
 	grain.AfterFunc(GrainTickInterval, grain.tick)
 	grain.mailbox.Start()
 	return grain
+}
+
+func (grain *Grain) SetDeactiveTime(deactiveTime time.Duration) {
+	grain.deactiveTime = deactiveTime
 }
 
 func (grain *Grain) GetIdentity() pd.GrainIdentity {
@@ -122,7 +128,7 @@ func (grain *Grain) tick() {
 	case grain_un_activate, grain_activated, grain_running:
 		now := time.Now()
 		lastRequest := grain.lastRequest.Load().(time.Time)
-		if grain.mailbox.awaitCount == 0 && now.Sub(lastRequest) > GrainGCTime {
+		if grain.mailbox.awaitCount == 0 && now.Sub(lastRequest) > grain.deactiveTime {
 			if grain.userObject == nil {
 				grain.deactive(nil)
 			} else if err := grain.userObject.Deactivate(); err != nil {
