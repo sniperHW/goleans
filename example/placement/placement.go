@@ -306,6 +306,10 @@ func (s *placementSvr) remAvaliableSilo(grain string, si *silo) {
 	}
 }
 
+func (s *placementSvr) getSiloByaddr(logicAddr addr.LogicAddr) *silo {
+	return s.Silos[logicAddr]
+}
+
 func NewServer(storage string) (*placementSvr, error) {
 	f, err := os.OpenFile(storage, os.O_CREATE|os.O_RDONLY, 0644)
 	if err != nil {
@@ -400,7 +404,7 @@ func (s *placementSvr) Activate(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
 	req := msg.PayLoad.(*ActivateReq)
-	if place, ok := s.Placement[req.Identity]; ok {
+	if place, ok := s.Placement[req.Identity]; ok && s.getSiloByaddr(place) != nil {
 		if place != req.Addr {
 			sess.Send(&Message{Seq: msg.Seq, PayLoad: &ActivateResp{Addr: place}})
 			return
@@ -440,13 +444,23 @@ func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
 	defer s.Unlock()
 	req := msg.PayLoad.(*GetPlacementReq)
 	if place, ok := s.Placement[req.Identity]; ok {
-		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: place}})
-		return
+		if s.getSiloByaddr(place) != nil {
+			sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: place}})
+			return
+		} else {
+			//原来的silo已经被移除
+			delete(s.Placement, req.Identity)
+		}
 	}
 
 	if place, ok := s.tempPlacement[req.Identity]; ok {
-		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: place.addr}})
-		return
+		if s.getSiloByaddr(place.addr) != nil {
+			sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: place.addr}})
+			return
+		} else {
+			//原来的silo已经被移除
+			delete(s.tempPlacement, req.Identity)
+		}
 	}
 
 	t := strings.Split(string(req.Identity), "@")
