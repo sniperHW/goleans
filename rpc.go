@@ -372,10 +372,8 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 			reqMessage.Oneway = true
 			req := reqMessage.Encode()
 			for {
-				var pdErr error
 				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
 				if err != nil {
-					pdErr = err
 					time.Sleep(time.Millisecond * 10)
 				} else if err = c.node.SendBinMessageWithContext(ctx, remoteAddr, Actor_request, req); err == nil {
 					return nil
@@ -392,9 +390,6 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 
 				select {
 				case <-ctx.Done():
-					if pdErr != nil {
-						logger.Errorf("call grain:%s timeout with pd error:%v", identity, pdErr)
-					}
 					err = ctx.Err()
 					switch err {
 					case context.Canceled:
@@ -413,10 +408,8 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 			wait := respWaitPool.Get().(chan *ResponseMsg)
 			for {
 				pending.Store(reqMessage.Seq, wait)
-				var pdErr error
 				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
 				if err != nil {
-					pdErr = err
 					time.Sleep(time.Millisecond * 10)
 				} else if err = c.node.SendBinMessageWithContext(ctx, remoteAddr, Actor_request, req); err == nil {
 					//等待响应
@@ -432,6 +425,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 								time.Sleep(time.Millisecond * 10)
 							}
 						case ErrCodeRetryAgain:
+							err = ErrCallRetry
 							time.Sleep(RetryInterval)
 						default:
 							return getDescByErrCode(uint16(resp.ErrCode))
@@ -469,9 +463,6 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					pending.Delete(reqMessage.Seq)
 					if err == ErrCallRetry {
 						return err
-					}
-					if pdErr != nil {
-						logger.Errorf("call grain:%s timeout with pd error:%v", identity, pdErr)
 					}
 					err = ctx.Err()
 					switch err {
