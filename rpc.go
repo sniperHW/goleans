@@ -307,29 +307,9 @@ func (c *methodCaller) call(context context.Context, replyer *Replyer, req *Requ
 	}
 }
 
-/////Client
-
-type callContext struct {
-	respC        chan error
-	fired        int32
-	respReceiver proto.Message
-}
-
-func (c *callContext) callOnResponse(resp *ResponseMsg) {
-	if atomic.CompareAndSwapInt32(&c.fired, 0, 1) {
-		if resp.ErrCode == ErrCodeOk {
-			if e := proto.Unmarshal(resp.Ret, c.respReceiver); e != nil {
-				logger.Errorf("callOnResponse decode error:%v", e)
-				c.respC <- errors.New("invaild respReceiver")
-			} else {
-				c.respC <- nil
-			}
-		} else if resp.ErrCode == ErrCodeRedirect {
-			c.respC <- pd.ErrorRedirect{Addr: addr.LogicAddr(resp.RedirectAddr)}
-		} else {
-			c.respC <- getDescByErrCode(uint16(resp.ErrCode))
-		}
-	}
+// ///Client
+var respWaitPool = sync.Pool{
+	New: func() interface{} { return make(chan *ResponseMsg, 1) },
 }
 
 type RPCClient struct {
@@ -372,7 +352,7 @@ func (c *RPCClient) makeSequence() (seq uint64) {
 
 func (c *RPCClient) OnRPCResponse(resp *ResponseMsg) {
 	if ctx, ok := c.pendingCall[int(resp.Seq)%len(c.pendingCall)].LoadAndDelete(resp.Seq); ok {
-		ctx.(*callContext).callOnResponse(resp)
+		ctx.(chan *ResponseMsg) <- resp
 	} else {
 		logger.Infof("onResponse with no reqContext:%d", resp.Seq)
 	}
@@ -426,17 +406,13 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					}
 				default:
 				}
-
 			}
 		} else {
 			req := reqMessage.Encode()
 			pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
-			callCtx := &callContext{
-				respReceiver: ret,
-				respC:        make(chan error),
-			}
+			wait := respWaitPool.Get().(chan *ResponseMsg)
 			for {
-				pending.Store(reqMessage.Seq, callCtx)
+				pending.Store(reqMessage.Seq, wait)
 				var pdErr error
 				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
 				if err != nil {
@@ -445,24 +421,26 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 				} else if err = c.node.SendBinMessageWithContext(ctx, remoteAddr, Actor_request, req); err == nil {
 					//等待响应
 					select {
-					case err := <-callCtx.respC:
-						switch err := err.(type) {
-						case pd.ErrorRedirect:
-							c.placementDriver.ResetPlacementCache(identity, err.Addr)
-							if err.Addr.Empty() {
+					case resp := <-wait:
+						respWaitPool.Put(wait)
+						switch resp.ErrCode {
+						case ErrCodeOk:
+							return proto.Unmarshal(resp.Ret, ret)
+						case ErrCodeRedirect:
+							c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(resp.RedirectAddr))
+							if resp.RedirectAddr == 0 {
 								time.Sleep(time.Millisecond * 10)
 							}
-						case error:
-							if err == ErrCallRetry {
-								time.Sleep(RetryInterval)
-							} else {
-								return err
-							}
+						case ErrCodeRetryAgain:
+							time.Sleep(RetryInterval)
 						default:
-							return nil
+							return getDescByErrCode(uint16(resp.ErrCode))
 						}
 					case <-ctx.Done():
-						pending.Delete(reqMessage.Seq)
+						_, ok := pending.LoadAndDelete(reqMessage.Seq)
+						if ok {
+							respWaitPool.Put(wait)
+						}
 						err = ctx.Err()
 						switch err {
 						case context.Canceled:
@@ -474,6 +452,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 						}
 					}
 				} else {
+					//没有发出去
 					switch err {
 					case clustergo.ErrInvaildNode:
 						c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
