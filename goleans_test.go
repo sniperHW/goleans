@@ -280,14 +280,14 @@ func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
 			MailboxCap: 32,
 		},
 	}, factory)
-	node.RegisterBinrayHandler(Actor_request, func(ctx context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+	node.RegisterBinaryHandler(Actor_request, func(ctx context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 		req := RequestMsg{}
 		if err := req.Decode(msg); err != nil {
 			logger.Error(err)
 		} else {
 			silo.OnRPCRequest(ctx, from, &req)
 		}
-	}).RegisterBinrayHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+	}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
 		pdc.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
 	})
@@ -344,14 +344,14 @@ func TestGoleans(t *testing.T) {
 
 	rpcClient := NewRPCClient(node2, pdClient2)
 
-	node2.RegisterBinrayHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+	node2.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 		resp := ResponseMsg{}
 		if err := resp.Decode(msg); err != nil {
 			logger.Error(err)
 		} else {
 			rpcClient.OnRPCResponse(&resp)
 		}
-	}).RegisterBinrayHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+	}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
 		pdClient2.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
 	})
@@ -422,14 +422,14 @@ func TestGrain(t *testing.T) {
 
 	rpcClient := NewRPCClient(node2, pdClient2)
 
-	node2.RegisterBinrayHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+	node2.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 		resp := ResponseMsg{}
 		if err := resp.Decode(msg); err != nil {
 			logger.Error(err)
 		} else {
 			rpcClient.OnRPCResponse(&resp)
 		}
-	}).RegisterBinrayHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+	}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
 		pdClient2.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
 	})

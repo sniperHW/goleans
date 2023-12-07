@@ -35,7 +35,7 @@ func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDri
 		}
 		node := clustergo.GetDefaultNode()
 		rpcClient = NewRPCClient(node, placementDriver)
-		node.RegisterBinrayHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		node.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 			resp := ResponseMsg{}
 			if err := resp.Decode(msg); err != nil {
 				logger.Error(err)
@@ -74,14 +74,14 @@ func StartSilo(discovery discovery.Discovery, localAddr addr.LogicAddr, placemen
 			}
 			silo = s
 
-			node.RegisterBinrayHandler(Actor_request, func(ctx context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+			node.RegisterBinaryHandler(Actor_request, func(ctx context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 				req := RequestMsg{}
 				if err := req.Decode(msg); err != nil {
 					logger.Error(err)
 				} else {
 					silo.OnRPCRequest(ctx, from, &req)
 				}
-			}).RegisterBinrayHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+			}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 				if len(msg) > 4 {
 					newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
 					placementDriver.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
@@ -90,7 +90,7 @@ func StartSilo(discovery discovery.Discovery, localAddr addr.LogicAddr, placemen
 		}
 
 		rpcClient = NewRPCClient(node, placementDriver)
-		node.RegisterBinrayHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		node.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 			resp := ResponseMsg{}
 			if err := resp.Decode(msg); err != nil {
 				logger.Error(err)
