@@ -37,9 +37,10 @@ func Register(grain *goleans.Grain,o {{.Service}}) error {
 }
 
 
-func Call(ctx context.Context,identity pd.GrainIdentity,arg *{{.Request}}) (resp {{.Response}},err error) {
-	err = goleans.Call(ctx,identity,{{.Method}},arg,&resp)
-	return resp,err
+func Call(ctx context.Context,identity pd.GrainIdentity,arg *{{.Request}}) (*{{.Response}},error) {
+	var resp {{.Response}}
+	err := goleans.Call(ctx,identity,{{.Method}},arg,&resp)
+	return &resp,err
 }
 `
 

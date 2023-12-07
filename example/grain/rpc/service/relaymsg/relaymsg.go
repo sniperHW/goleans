@@ -26,7 +26,8 @@ func Register(grain *goleans.Grain,o Relaymsg) error {
 }
 
 
-func Call(ctx context.Context,identity pd.GrainIdentity,arg *RelaymsgReq) (resp RelaymsgRsp,err error) {
-	err = goleans.Call(ctx,identity,4,arg,&resp)
-	return resp,err
+func Call(ctx context.Context,identity pd.GrainIdentity,arg *RelaymsgReq) (*RelaymsgRsp,error) {
+	var resp RelaymsgRsp
+	err := goleans.Call(ctx,identity,4,arg,&resp)
+	return &resp,err
 }

@@ -26,7 +26,8 @@ func Register(grain *goleans.Grain,o Logout) error {
 }
 
 
-func Call(ctx context.Context,identity pd.GrainIdentity,arg *LogoutReq) (resp LogoutRsp,err error) {
-	err = goleans.Call(ctx,identity,5,arg,&resp)
-	return resp,err
+func Call(ctx context.Context,identity pd.GrainIdentity,arg *LogoutReq) (*LogoutRsp,error) {
+	var resp LogoutRsp
+	err := goleans.Call(ctx,identity,5,arg,&resp)
+	return &resp,err
 }
