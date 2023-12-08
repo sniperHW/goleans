@@ -255,6 +255,13 @@ func (u *User) Init(grain *Grain) error {
 	//从数据库加载数据，初始化User
 	u.grain = grain
 	grain.RegisterMethod(1, u.Echo)
+	grain.AddCallPipeline(func(replyer *Replyer, req *RequestMsg) bool {
+		beg := time.Now()
+		replyer.SetReplyHook(func(_ *RequestMsg) {
+			logger.Debugf("call %s.%d(%v) use:%v", grain.Identity, req.Method, req.arg, time.Now().Sub(beg))
+		})
+		return true
+	})
 	return nil
 }
 

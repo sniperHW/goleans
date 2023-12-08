@@ -105,15 +105,13 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 	logger.Debugf("OnRPCRequest from:%s method:%d seq:%d", from.String(), req.Method, req.Seq)
 
 	replyer := &Replyer{
-		seq:      req.Seq,
-		oneway:   req.Oneway,
-		from:     from,
-		identity: req.To,
-		node:     s.node,
+		from: from,
+		node: s.node,
+		req:  req,
 	}
 
 	if s.stoped.Load() {
-		replyer.Redirect(0)
+		replyer.redirect(0)
 		return
 	}
 
@@ -122,7 +120,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 	t := strings.Split(string(identity), "@")
 
 	if len(t) < 2 {
-		replyer.Error(ErrCodeInvaildIdentity)
+		replyer.error(ErrCodeInvaildIdentity)
 		return
 	}
 
@@ -139,7 +137,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 	err := grain.AddTaskNoWait(func() {
 		if grain.stoped {
 			//silo正在停止
-			replyer.Redirect(0)
+			replyer.redirect(0)
 			return
 		}
 
@@ -150,13 +148,13 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 			switch err := err.(type) {
 			case pd.ErrorRedirect:
 				logger.Errorf("Activate Grain:%s redirect to:%s", grain.Identity, err.Addr.String())
-				replyer.Redirect(err.Addr)
+				replyer.redirect(err.Addr)
 				s.removeGrain(grain)
 				grain.mailbox.Close(false)
 				return
 			case error:
 				logger.Errorf("Activate Grain:%s error:%v", grain.Identity, err)
-				replyer.Error(ErrCodeRetryAgain)
+				replyer.error(ErrCodeRetryAgain)
 				s.removeGrain(grain)
 				grain.mailbox.Close(false)
 				return
@@ -170,7 +168,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 				if userObj := s.userObjectFactory(grainType); nil == userObj {
 					logger.Errorf("Create Grain:%s Failed", grain.Identity)
 					grain.deactive(nil)
-					replyer.Redirect(addr.LogicAddr(0))
+					replyer.redirect(addr.LogicAddr(0))
 					return
 				} else {
 					grain.userObject = userObj
@@ -181,9 +179,9 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 				logger.Errorf("Create Grain:%s Init error:%e", grain.Identity, err)
 				if err == ErrInitUnRetryAbleError {
 					//通告调用方，调用不应再尝试
-					replyer.Error(ErrCodeUserGrainInitError)
+					replyer.error(ErrCodeUserGrainInitError)
 				} else {
-					replyer.Error(ErrCodeRetryAgain)
+					replyer.error(ErrCodeRetryAgain)
 				}
 				return
 			} else {
@@ -192,19 +190,15 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 		}
 
 		if grain.state == grain_running {
-			if fn := grain.methods[req.Method]; fn != nil {
-				fn.call(ctx, replyer, req)
-			} else {
-				replyer.Error(ErrCodeMethodNotExist)
-			}
+			grain.serveCall(ctx, replyer, req)
 		} else {
-			replyer.Redirect(addr.LogicAddr(0))
+			replyer.redirect(addr.LogicAddr(0))
 		}
 	})
 
 	if err == ErrMailBoxClosed {
-		replyer.Redirect(addr.LogicAddr(0))
+		replyer.redirect(addr.LogicAddr(0))
 	} else if err == ErrMailBoxFull {
-		replyer.Error(ErrCodeRetryAgain)
+		replyer.error(ErrCodeRetryAgain)
 	}
 }

@@ -2,9 +2,14 @@ package goleans
 
 import (
 	"context"
+	"fmt"
 	"goleans/pd"
+	"reflect"
+	"runtime"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -44,6 +49,7 @@ type Grain struct {
 	state        int
 	stoped       bool
 	deactiveTime time.Duration
+	before       []func(*Replyer, *RequestMsg) bool //前置管道线
 }
 
 func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
@@ -68,6 +74,12 @@ func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
 	grain.lastRequest.Store(time.Now())
 	grain.AfterFunc(GrainTickInterval, grain.tick)
 	grain.mailbox.Start()
+	return grain
+}
+
+// 添加前置管道线处理
+func (grain *Grain) AddCallPipeline(fn func(*Replyer, *RequestMsg) bool) *Grain {
+	grain.before = append(grain.before, fn)
 	return grain
 }
 
@@ -121,6 +133,35 @@ func (grain *Grain) deactive(fn func()) {
 			grain.silo.placementDriver.Deactivate(ctx, grain.Identity)
 		}
 	}
+}
+
+func (grain *Grain) serveCall(ctx context.Context, replyer *Replyer, req *RequestMsg) {
+	call := grain.methods[req.Method]
+	if call == nil {
+		replyer.error(ErrCodeMethodNotExist)
+		return
+	}
+	arg := reflect.New(call.argType).Interface().(proto.Message)
+	err := proto.Unmarshal(req.Arg, arg)
+	if err != nil {
+		replyer.error(ErrCodeInvaildArg)
+		return
+	}
+	req.arg = arg
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 65535)
+			l := runtime.Stack(buf, false)
+			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
+			replyer.error(ErrCodeMethodCallPanic)
+		}
+	}()
+	for _, v := range grain.before {
+		if !v(replyer, req) {
+			return
+		}
+	}
+	call.fn.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(replyer), reflect.ValueOf(arg)})
 }
 
 func (grain *Grain) tick() {

@@ -74,6 +74,7 @@ type RequestMsg struct {
 	Oneway bool
 	To     pd.GrainIdentity
 	Arg    []byte
+	arg    proto.Message
 }
 
 type ResponseMsg struct {
@@ -81,6 +82,10 @@ type ResponseMsg struct {
 	ErrCode      int
 	RedirectAddr int
 	Ret          []byte
+}
+
+func (r RequestMsg) GetArg() interface{} {
+	return r.arg
 }
 
 func (req *RequestMsg) Encode() []byte {
@@ -193,24 +198,27 @@ func (resp *ResponseMsg) Decode(buff []byte) error {
 ////server
 
 type Replyer struct {
-	seq      uint64
-	replyed  int32
-	oneway   bool
-	identity pd.GrainIdentity
-	from     addr.LogicAddr
-	node     *clustergo.Node
+	req     *RequestMsg
+	replyed int32
+	from    addr.LogicAddr
+	node    *clustergo.Node
+	hook    func(*RequestMsg)
 }
 
-func (r *Replyer) Redirect(redirectAddr addr.LogicAddr) {
-	if r.oneway {
+func (r *Replyer) SetReplyHook(hook func(_ *RequestMsg)) {
+	r.hook = hook
+}
+
+func (r *Replyer) redirect(redirectAddr addr.LogicAddr) {
+	if r.req.Oneway {
 		//通告对端identity不在当前节点
-		buff := make([]byte, 4, len(r.identity)+4)
+		buff := make([]byte, 4, len(r.req.To)+4)
 		binary.BigEndian.PutUint32(buff, uint32(redirectAddr))
-		buff = append(buff, []byte(r.identity)...)
+		buff = append(buff, []byte(r.req.To)...)
 		r.node.SendBinMessage(r.from, Actor_notify_redirect, buff)
 	} else if atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
 		resp := &ResponseMsg{
-			Seq:          r.seq,
+			Seq:          r.req.Seq,
 			ErrCode:      ErrCodeRedirect,
 			RedirectAddr: int(redirectAddr),
 		}
@@ -220,10 +228,10 @@ func (r *Replyer) Redirect(redirectAddr addr.LogicAddr) {
 	}
 }
 
-func (r *Replyer) Error(errCode int) {
-	if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+func (r *Replyer) error(errCode int) {
+	if !r.req.Oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
 		resp := &ResponseMsg{
-			Seq:     r.seq,
+			Seq:     r.req.Seq,
 			ErrCode: errCode,
 		}
 		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
@@ -232,10 +240,25 @@ func (r *Replyer) Error(errCode int) {
 	}
 }
 
+func (r *Replyer) callHook() {
+	if r.hook == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 65535)
+			l := runtime.Stack(buf, false)
+			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
+		}
+	}()
+	r.hook(r.req)
+}
+
 func (r *Replyer) Reply(ret proto.Message) {
-	if !r.oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+	if !r.req.Oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+		r.callHook()
 		resp := &ResponseMsg{
-			Seq: r.seq,
+			Seq: r.req.Seq,
 		}
 
 		if b, err := proto.Marshal(ret); err != nil {
@@ -288,23 +311,6 @@ func makeMethodCaller(method interface{}) (*methodCaller, error) {
 	}
 
 	return caller, nil
-}
-
-func (c *methodCaller) call(context context.Context, replyer *Replyer, req *RequestMsg) {
-	arg := reflect.New(c.argType).Interface()
-	if err := proto.Unmarshal(req.Arg, arg.(proto.Message)); err == nil {
-		defer func() {
-			if r := recover(); r != nil {
-				buf := make([]byte, 65535)
-				l := runtime.Stack(buf, false)
-				logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
-				replyer.Error(ErrCodeMethodCallPanic)
-			}
-		}()
-		c.fn.Call([]reflect.Value{reflect.ValueOf(context), reflect.ValueOf(replyer), reflect.ValueOf(arg)})
-	} else {
-		replyer.Error(ErrCodeInvaildArg)
-	}
 }
 
 // ///Client
