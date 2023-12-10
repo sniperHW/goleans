@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func BenchmarkChannel(b *testing.B) {
+/*func BenchmarkChannel(b *testing.B) {
 	box := make(chan func(), 64)
 
 	die := make(chan struct{})
@@ -97,6 +97,75 @@ func BenchmarkAwait(b *testing.B) {
 		fmt.Println(atomic.LoadInt32(&counter))
 		atomic.StoreInt32(&counter, 0)
 	}
+}*/
+
+func BenchmarkChannel(b *testing.B) {
+	box := make(chan func(), 64)
+	die := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case fn := <-box:
+				fn()
+			case <-die:
+				return
+			}
+		}
+	}()
+
+	ret := make(chan struct{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		box <- func() {
+			ret <- struct{}{}
+		}
+		<-ret
+	}
+	close(die)
+}
+
+func BenchmarkMailbox(b *testing.B) {
+	box := NewMailbox(MailboxOption{
+		UrgentQueueCap: 64,
+		NormalQueueCap: 64,
+		AwaitQueueCap:  64,
+	})
+
+	box.Start()
+	ret := make(chan struct{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		box.PutNormal(func() {
+			ret <- struct{}{}
+		})
+		<-ret
+	}
+	box.Close(true)
+
+}
+
+func BenchmarkAwait(b *testing.B) {
+	box := NewMailbox(MailboxOption{
+		UrgentQueueCap: 64,
+		NormalQueueCap: 64,
+		AwaitQueueCap:  64,
+	})
+
+	box.Start()
+	ret := make(chan struct{})
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		box.PutNormal(func() {
+			box.Await(runtime.Gosched)
+			ret <- struct{}{}
+		})
+		<-ret
+	}
+	box.Close(true)
 }
 
 func TestMailbox(t *testing.T) {
