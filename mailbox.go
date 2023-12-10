@@ -1,7 +1,7 @@
 package goleans
 
 import (
-	"context"
+	"errors"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -24,45 +24,173 @@ func (co *goroutine) resume(m *Mailbox) {
 	co.signal <- m
 }
 
+type ringqueue[T any] struct {
+	head      int
+	tail      int
+	queue     []T
+	cond      *sync.Cond
+	waitCount int
+}
+
+func newRingQueue[T any](cap int, l sync.Locker) *ringqueue[T] {
+	if cap <= 0 {
+		cap = 1
+	}
+	ring := &ringqueue[T]{
+		queue: make([]T, cap+1),
+		cond:  sync.NewCond(l),
+	}
+	return ring
+}
+
+func (ring *ringqueue[T]) empty() bool {
+	return ring.head == ring.tail
+}
+
+func (ring *ringqueue[T]) full() bool {
+	return (ring.tail+1)%len(ring.queue) == ring.head
+}
+
+func (ring *ringqueue[T]) put(v T) {
+	ring.queue[ring.tail] = v
+	ring.tail = (ring.tail + 1) % len(ring.queue)
+}
+
+func (ring *ringqueue[T]) pop() T {
+	v := ring.queue[ring.head]
+	ring.head = (ring.head + 1) % len(ring.queue)
+	return v
+}
+
+func (ring *ringqueue[T]) wait() {
+	ring.waitCount++
+	ring.cond.Wait()
+	ring.waitCount--
+}
+
+func (ring *ringqueue[T]) signal() {
+	if ring.waitCount > 0 {
+		ring.cond.Signal()
+	}
+}
+
+func (ring *ringqueue[T]) broadcast() {
+	if ring.waitCount > 0 {
+		ring.cond.Broadcast()
+	}
+}
+
 type Mailbox struct {
-	taskQueue  chan func()
-	awakeQueue chan *goroutine
-	current    *goroutine
-	die        chan struct{}
-	startOnce  sync.Once
-	closed     int32
-	awaitCount int32
-	closeCh    chan struct{}
+	mtx         sync.Mutex
+	current     *goroutine
+	startOnce   sync.Once
+	closed      bool
+	awaitCount  int32
+	closeCh     chan struct{}
+	waitCount   int
+	cond        *sync.Cond
+	awaitQueue  *ringqueue[*goroutine]
+	urgentQueue *ringqueue[func()]
+	normalQueue *ringqueue[func()]
 }
 
-func (m *Mailbox) PushTask(ctx context.Context, fn func()) error {
-	if m.closed == 1 {
-		return ErrMailBoxClosed
-	} else {
-		select {
-		case m.taskQueue <- fn:
-			return nil
-		case <-m.die:
-			return ErrMailBoxClosed
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+type MailboxOption struct {
+	UrgentQueueCap int
+	NormalQueueCap int
+	AwaitQueueCap  int
+}
+
+func NewMailbox(opt MailboxOption) *Mailbox {
+	m := &Mailbox{
+		closeCh: make(chan struct{}),
+	}
+	m.awaitQueue = newRingQueue[*goroutine](opt.AwaitQueueCap, &m.mtx)
+	m.urgentQueue = newRingQueue[func()](opt.UrgentQueueCap, &m.mtx)
+	m.normalQueue = newRingQueue[func()](opt.AwaitQueueCap, &m.mtx)
+	m.cond = sync.NewCond(&m.mtx)
+	return m
+}
+
+func (m *Mailbox) signal() {
+	if m.waitCount > 0 {
+		m.cond.Signal()
 	}
 }
 
-func (m *Mailbox) PushTaskNoWait(fn func()) error {
-	if m.closed == 1 {
-		return ErrMailBoxClosed
-	} else {
-		select {
-		case m.taskQueue <- fn:
-			return nil
-		case <-m.die:
-			return ErrMailBoxClosed
-		default:
-			return ErrMailBoxFull
+func (m *Mailbox) wait() {
+	m.waitCount++
+	m.cond.Wait()
+	m.waitCount--
+}
+
+func (m *Mailbox) putAwait(g *goroutine) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	for m.awaitQueue.full() {
+		m.awaitQueue.wait()
+	}
+	m.awaitQueue.put(g)
+	m.signal()
+}
+
+func (m *Mailbox) PutNormal(fn func()) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	if m.closed {
+		return errors.New("mailbox closed")
+	}
+	for m.normalQueue.full() {
+		m.normalQueue.wait()
+		if m.closed {
+			return errors.New("mailbox closed")
 		}
 	}
+	m.normalQueue.put(fn)
+	m.signal()
+	return nil
+}
+
+func (m *Mailbox) PutNormalNoWait(fn func()) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	if m.closed {
+		return errors.New("mailbox closed")
+	} else if m.normalQueue.full() {
+		return errors.New("full")
+	}
+	m.normalQueue.put(fn)
+	m.signal()
+	return nil
+}
+
+func (m *Mailbox) PutUrgent(fn func()) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	if m.closed {
+		return errors.New("mailbox closed")
+	}
+	for m.urgentQueue.full() {
+		m.urgentQueue.wait()
+		if m.closed {
+			return errors.New("mailbox closed")
+		}
+	}
+	m.urgentQueue.put(fn)
+	m.signal()
+	return nil
+}
+
+func (m *Mailbox) PutUrgentNoWait(fn func()) error {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	if m.closed {
+		return errors.New("mailbox closed")
+	} else if m.urgentQueue.full() {
+		return errors.New("full")
+	}
+	m.urgentQueue.put(fn)
+	m.signal()
+	return nil
 }
 
 var mask int = GoroutinePoolCap
@@ -100,42 +228,37 @@ var gotine_pool goroutine_pool = goroutine_pool{
 	pool: make([]*goroutine, mask+1),
 }
 
-func (m *Mailbox) onDie(co *goroutine) {
-	//处理taskQueue中剩余任务，等待awaitCount变成0
-	for atomic.LoadInt32(&m.awaitCount) > 0 || len(m.taskQueue) > 0 {
-		select {
-		case gotine := <-m.awakeQueue:
-			atomic.AddInt32(&m.awaitCount, -1)
-			gotine.resume(m)
-			return
-		case fn := <-m.taskQueue:
-			fn()
-		}
-	}
-	close(m.closeCh)
-}
-
 func (co *goroutine) loop(m *Mailbox) {
+
 	for {
-		if atomic.LoadInt32(&m.awaitCount) > 0 {
-			select {
-			case gotine := <-m.awakeQueue:
+		m.mtx.Lock()
+		for {
+			if !m.awaitQueue.empty() {
+				gotine := m.awaitQueue.pop()
+				m.awaitQueue.signal()
+				m.mtx.Unlock()
 				atomic.AddInt32(&m.awaitCount, -1)
 				gotine.resume(m)
 				return
-			case fn := <-m.taskQueue:
+			} else if !m.urgentQueue.empty() {
+				fn := m.urgentQueue.pop()
+				m.urgentQueue.signal()
+				m.mtx.Unlock()
 				fn()
-			case <-m.die:
-				m.onDie(co)
-				return
-			}
-		} else {
-			select {
-			case fn := <-m.taskQueue:
+				break
+			} else if !m.normalQueue.empty() {
+				fn := m.normalQueue.pop()
+				m.normalQueue.signal()
+				m.mtx.Unlock()
 				fn()
-			case <-m.die:
-				m.onDie(co)
-				return
+				break
+			} else {
+				if m.closed && atomic.LoadInt32(&m.awaitCount) == 0 {
+					m.mtx.Unlock()
+					close(m.closeCh)
+					return
+				}
+				m.wait()
 			}
 		}
 	}
@@ -230,16 +353,22 @@ func (m *Mailbox) Await(fn interface{}, args ...interface{}) (ret []interface{})
 	//在这个点,fn跟m的任务队列并发执行
 	ret = call(fn, args...)
 	//将自己添加到待唤醒通道中
-	m.awakeQueue <- current
+	m.putAwait(current)
 	//等待被唤醒后继续执行
 	current.yield()
 	return ret
 }
 
 func (m *Mailbox) Close(wait bool) {
-	if atomic.CompareAndSwapInt32(&m.closed, 0, 1) {
-		close(m.die)
+	m.mtx.Lock()
+	if !m.closed {
+		m.closed = true
+		m.normalQueue.broadcast()
+		m.urgentQueue.broadcast()
+		m.signal()
 	}
+	m.mtx.Unlock()
+
 	if wait {
 		<-m.closeCh
 	}

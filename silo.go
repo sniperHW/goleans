@@ -88,7 +88,7 @@ func (s *Silo) Stop() {
 		s.Lock()
 		for _, v := range s.grains {
 			wait.Add(1)
-			if v.mailbox.PushTask(context.TODO(), func() {
+			if v.mailbox.PutNormal(func() {
 				v.onSiloStop(wait.Done)
 			}) != nil {
 				wait.Done()
@@ -134,7 +134,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 	}
 	s.Unlock()
 	grain.lastRequest.Store(time.Now())
-	err := grain.AddTaskNoWait(func() {
+	err := grain.mailbox.PutUrgentNoWait(func() {
 		if grain.stoped {
 			//silo正在停止
 			replyer.redirect(0)
