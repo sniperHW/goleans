@@ -218,9 +218,9 @@ func TestUrgent(t *testing.T) {
 				fmt.Println("urgent", atomic.AddInt32(&urgent, 1))
 			})
 		}
-		fmt.Println(s.PutUrgentNoWait(func() {
-			fmt.Println("urgent nowait")
-		}))
+		//fmt.Println(s.PutUrgentNoWait(func() {
+		//	fmt.Println("urgent nowait")
+		//}))
 		s.PutUrgent(func() {
 			fmt.Println("urgent", atomic.AddInt32(&urgent, 1))
 		})

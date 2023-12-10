@@ -180,6 +180,7 @@ func (m *Mailbox) PutUrgent(fn func()) error {
 	return nil
 }
 
+/*
 func (m *Mailbox) PutUrgentNoWait(fn func()) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
@@ -191,7 +192,7 @@ func (m *Mailbox) PutUrgentNoWait(fn func()) error {
 	m.urgentQueue.put(fn)
 	m.signal()
 	return nil
-}
+}*/
 
 var mask int = GoroutinePoolCap
 

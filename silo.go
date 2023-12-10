@@ -23,8 +23,10 @@ func GetLogger() Logger {
 }
 
 type GrainCfg struct {
-	Type       string
-	MailboxCap int
+	Type          string
+	NormalBoxCap  int
+	UrgentBoxCap  int
+	AwaitQueueCap int
 }
 
 var (
@@ -134,7 +136,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 	}
 	s.Unlock()
 	grain.lastRequest.Store(time.Now())
-	err := grain.mailbox.PutUrgentNoWait(func() {
+	err := grain.mailbox.PutNormalNoWait(func() {
 		if grain.stoped {
 			//silo正在停止
 			replyer.redirect(0)

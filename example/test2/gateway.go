@@ -53,7 +53,7 @@ func main() {
 	discoveryCli := discovery.NewClient(*discoveryAddr)
 	pdClient := placement.NewCli(localaddr, *pdAddr)
 
-	clustergo.RegisterBinaryHandler(100, func(_ addr.LogicAddr, _ uint16, msg []byte) {
+	clustergo.RegisterBinaryHandler(100, func(_ context.Context, _ addr.LogicAddr, _ uint16, msg []byte) {
 		//id在包尾巴
 		id := binary.BigEndian.Uint64(msg[len(msg)-8:])
 		mtx.Lock()

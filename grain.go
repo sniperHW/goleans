@@ -13,8 +13,6 @@ import (
 )
 
 var (
-	GrainMailboxCap     = 256 //Grain任务队列大小，队列满时调用Grain.AddTask将会阻塞
-	GrainAwaitQueueCap  = 64  //Grain Await队列大小，队列满时Await返回时将阻塞
 	GrainTickInterval   = time.Second * 30
 	GoroutinePoolCap    = 0xFFF           //goroutine池容量,大小必须为2的幂次方-1。
 	DefaultDeactiveTime = time.Minute * 5 //Grain空闲超过这个时间后执行Deactive
@@ -64,15 +62,10 @@ func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
 		Identity: identity,
 		methods:  map[uint16]*methodCaller{},
 		mailbox: NewMailbox(MailboxOption{
-			UrgentQueueCap: grainCfg.MailboxCap,
-			NormalQueueCap: grainCfg.MailboxCap,
-			AwaitQueueCap:  GrainAwaitQueueCap,
-		}), /*&Mailbox{
-			taskQueue:  make(chan func(), grainCfg.MailboxCap),
-			awakeQueue: make(chan *goroutine, GrainAwakeQueueCap),
-			die:        make(chan struct{}),
-			closeCh:    make(chan struct{}),
-		},*/
+			UrgentQueueCap: grainCfg.NormalBoxCap,
+			NormalQueueCap: grainCfg.UrgentBoxCap,
+			AwaitQueueCap:  grainCfg.AwaitQueueCap,
+		}),
 		deactiveTime: DefaultDeactiveTime,
 	}
 	grain.lastRequest.Store(time.Now())
@@ -95,15 +88,13 @@ func (grain *Grain) GetIdentity() pd.GrainIdentity {
 	return grain.Identity
 }
 
-/*
-func (grain *Grain) AddTask(ctx context.Context, task func()) error {
-	return grain.mailbox.PushTask(ctx, task)
+func (grain *Grain) AddTask(task func()) error {
+	return grain.mailbox.PutNormal(task)
 }
 
 func (grain *Grain) AddTaskNoWait(task func()) error {
-	return grain.mailbox.PushTaskNoWait(task)
+	return grain.mailbox.PutNormalNoWait(task)
 }
-*/
 
 func (grain *Grain) Await(fn interface{}, args ...interface{}) (ret []interface{}) {
 	return grain.mailbox.Await(fn, args...)

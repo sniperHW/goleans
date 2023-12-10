@@ -18,8 +18,10 @@ import (
 // 当前节点支持的Grain类型
 var grainList []goleans.GrainCfg = []goleans.GrainCfg{
 	{
-		Type:       "User",
-		MailboxCap: 32,
+		Type:          "User",
+		NormalBoxCap:  32,
+		UrgentBoxCap:  32,
+		AwaitQueueCap: 23,
 	},
 }
 

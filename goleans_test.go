@@ -283,8 +283,10 @@ func init() {
 func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
 	silo, _ := newSilo(context.Background(), pdc, node, []GrainCfg{
 		{
-			Type:       "User",
-			MailboxCap: 32,
+			Type:          "User",
+			NormalBoxCap:  32,
+			UrgentBoxCap:  32,
+			AwaitQueueCap: 23,
 		},
 	}, factory)
 	node.RegisterBinaryHandler(Actor_request, func(ctx context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
@@ -331,8 +333,10 @@ func TestGoleans(t *testing.T) {
 
 	err := StartSilo(localDiscovery, node1Addr.LogicAddr(), pdClient1, []GrainCfg{
 		{
-			Type:       "User",
-			MailboxCap: 32,
+			Type:          "User",
+			NormalBoxCap:  32,
+			UrgentBoxCap:  32,
+			AwaitQueueCap: 23,
 		},
 	}, factory)
 	if err != nil {
