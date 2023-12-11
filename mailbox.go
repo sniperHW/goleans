@@ -1,6 +1,7 @@
 package goleans
 
 import (
+	"container/list"
 	"errors"
 	"reflect"
 	"sync"
@@ -364,5 +365,41 @@ func (m *Mailbox) Close(wait bool) {
 
 	if wait {
 		<-m.closeCh
+	}
+}
+
+type Mutex struct {
+	m        *Mailbox
+	owner    *goroutine
+	waitlist *list.List
+}
+
+func (mtx *Mutex) Lock() {
+	current := mtx.m.current
+	if mtx.owner == nil {
+		mtx.owner = current
+	} else {
+		if mtx.owner == current {
+			panic("Lock error")
+		}
+		mtx.waitlist.PushBack(current)
+		atomic.AddInt32(&mtx.m.awaitCount, 1)
+		mtx.m.sche()
+		//等待唤醒
+		current.yield()
+	}
+}
+
+func (mtx *Mutex) Unlock() {
+	if mtx.owner != mtx.m.current {
+		panic("Unlock error")
+	} else {
+		mtx.owner = nil
+		front := mtx.waitlist.Front()
+		if front != nil {
+			co := mtx.waitlist.Remove(front).(*goroutine)
+			mtx.owner = co
+			mtx.m.putAwait(co)
+		}
 	}
 }

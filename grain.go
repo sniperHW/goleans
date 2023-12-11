@@ -1,6 +1,7 @@
 package goleans
 
 import (
+	"container/list"
 	"context"
 	"fmt"
 	"goleans/pd"
@@ -178,6 +179,13 @@ func (grain *Grain) AfterFunc(d time.Duration, f func()) {
 	time.AfterFunc(d, func() {
 		grain.mailbox.PutUrgent(f)
 	})
+}
+
+func (grain *Grain) NewMutex() *Mutex {
+	return &Mutex{
+		m:        grain.mailbox,
+		waitlist: list.New(),
+	}
 }
 
 func (grain *Grain) onSiloStop(fn func()) {

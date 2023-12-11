@@ -1,6 +1,7 @@
 package goleans
 
 import (
+	"container/list"
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -300,5 +301,49 @@ func TestUrgent(t *testing.T) {
 	time.Sleep(time.Second)
 	s.Start()
 	<-c
+	s.Close(true)
+}
+
+func TestLock(t *testing.T) {
+	s := NewMailbox(MailboxOption{
+		UrgentQueueCap: 64,
+		NormalQueueCap: 64,
+		AwaitQueueCap:  64,
+	})
+
+	mtx := &Mutex{
+		m:        s,
+		waitlist: list.New(),
+	}
+
+	s.PutNormal(func() {
+		for i := 0; i < 10; i++ {
+			mtx.Lock()
+			fmt.Println("a")
+			mtx.Unlock()
+			s.Await(time.Sleep, time.Millisecond*100)
+		}
+	})
+
+	s.PutNormal(func() {
+		for i := 0; i < 10; i++ {
+			mtx.Lock()
+			fmt.Println("b")
+			mtx.Unlock()
+			s.Await(time.Sleep, time.Millisecond*100)
+		}
+	})
+
+	s.PutNormal(func() {
+		for i := 0; i < 10; i++ {
+			mtx.Lock()
+			fmt.Println("c")
+			mtx.Unlock()
+			s.Await(time.Sleep, time.Millisecond*100)
+		}
+	})
+
+	s.Start()
+
 	s.Close(true)
 }
