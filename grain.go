@@ -88,14 +88,6 @@ func (grain *Grain) GetIdentity() pd.GrainIdentity {
 	return grain.Identity
 }
 
-func (grain *Grain) AddTask(task func()) error {
-	return grain.mailbox.PutNormal(task)
-}
-
-func (grain *Grain) AddTaskNoWait(task func()) error {
-	return grain.mailbox.PutNormalNoWait(task)
-}
-
 func (grain *Grain) Await(fn interface{}, args ...interface{}) (ret []interface{}) {
 	return grain.mailbox.Await(fn, args...)
 }
@@ -194,7 +186,8 @@ func (grain *Grain) onSiloStop(fn func()) {
 	case grain_activated:
 		grain.deactive(fn)
 	case grain_running:
-		if grain.mailbox.awaitCount == 0 {
+		//只有当邮箱已经排空并且没有await调用才可以取消激活
+		if grain.mailbox.Empty() && atomic.LoadInt32(&grain.mailbox.awaitCount) == 0 {
 			var err error
 			for i := 0; i < 3; i++ {
 				if err = grain.userObject.Deactivate(); err != nil {

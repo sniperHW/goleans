@@ -180,20 +180,6 @@ func (m *Mailbox) PutUrgent(fn func()) error {
 	return nil
 }
 
-/*
-func (m *Mailbox) PutUrgentNoWait(fn func()) error {
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-	if m.closed {
-		return errors.New("mailbox closed")
-	} else if m.urgentQueue.full() {
-		return errors.New("full")
-	}
-	m.urgentQueue.put(fn)
-	m.signal()
-	return nil
-}*/
-
 var mask int = GoroutinePoolCap
 
 type goroutine_pool struct {
@@ -286,6 +272,12 @@ func (m *Mailbox) sche() {
 
 func (m *Mailbox) Start() {
 	m.startOnce.Do(m.sche)
+}
+
+func (m *Mailbox) Empty() bool {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	return m.urgentQueue.empty() && m.normalQueue.empty()
 }
 
 func call(fn interface{}, args ...interface{}) (result []interface{}) {
