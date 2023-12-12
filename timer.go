@@ -3,7 +3,7 @@ package goleans
 import (
 	"container/heap"
 	"fmt"
-	"runtime"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 )
@@ -27,9 +27,7 @@ func (t *Timer) call() {
 	if t.fired.CompareAndSwap(false, true) {
 		defer func() {
 			if r := recover(); r != nil {
-				buf := make([]byte, 65535)
-				l := runtime.Stack(buf, false)
-				logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
+				logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, debug.Stack())))
 			}
 		}()
 		t.fn()

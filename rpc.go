@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"goleans/pd"
 	"reflect"
-	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -246,9 +246,7 @@ func (r *Replyer) callHook() {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			buf := make([]byte, 65535)
-			l := runtime.Stack(buf, false)
-			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
+			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, debug.Stack())))
 		}
 	}()
 	r.hook(r.req)

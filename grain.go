@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"goleans/pd"
 	"reflect"
-	"runtime"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 
@@ -140,9 +140,7 @@ func (grain *Grain) serveCall(ctx context.Context, replyer *Replyer, req *Reques
 	req.arg = arg
 	defer func() {
 		if r := recover(); r != nil {
-			buf := make([]byte, 65535)
-			l := runtime.Stack(buf, false)
-			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, buf[:l])))
+			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, debug.Stack())))
 			replyer.error(ErrCodeMethodCallPanic)
 		}
 	}()
