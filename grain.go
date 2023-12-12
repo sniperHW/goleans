@@ -175,10 +175,8 @@ func (grain *Grain) tick() {
 	}
 }
 
-func (grain *Grain) AfterFunc(d time.Duration, f func()) {
-	time.AfterFunc(d, func() {
-		grain.mailbox.PutUrgent(f)
-	})
+func (grain *Grain) AfterFunc(d time.Duration, f func()) *Timer {
+	return grain.mailbox.AfterFunc(d, f)
 }
 
 func (grain *Grain) NewMutex() *Mutex {

@@ -82,6 +82,7 @@ func (ring *ringqueue[T]) broadcast() {
 }
 
 type Mailbox struct {
+	timedHeap
 	mtx         sync.Mutex
 	current     *goroutine
 	startOnce   sync.Once
@@ -134,7 +135,7 @@ func (m *Mailbox) putAwait(g *goroutine) {
 	m.signal()
 }
 
-func (m *Mailbox) PutNormal(fn func()) error {
+func (m *Mailbox) Input(fn func()) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	if m.closed {
@@ -151,7 +152,7 @@ func (m *Mailbox) PutNormal(fn func()) error {
 	return nil
 }
 
-func (m *Mailbox) PutNormalNoWait(fn func()) error {
+func (m *Mailbox) InputNoWait(fn func()) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	if m.closed {
@@ -164,7 +165,7 @@ func (m *Mailbox) PutNormalNoWait(fn func()) error {
 	return nil
 }
 
-func (m *Mailbox) PutUrgent(fn func()) error {
+func (m *Mailbox) InputUrgent(fn func()) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	if m.closed {
@@ -217,10 +218,16 @@ var gotine_pool goroutine_pool = goroutine_pool{
 }
 
 func (co *goroutine) loop(m *Mailbox) {
-
+	//queue := []*ringqueue[func()]{m.urgentQueue, m.normalQueue}
+	//urgentCount := 0
 	for {
 		m.mtx.Lock()
 		for {
+
+			if m.checkTimer {
+				m.doTimer()
+			}
+
 			if !m.awaitQueue.empty() {
 				gotine := m.awaitQueue.pop()
 				m.awaitQueue.signal()
@@ -248,6 +255,49 @@ func (co *goroutine) loop(m *Mailbox) {
 				}
 				m.wait()
 			}
+
+			/*if !m.awaitQueue.empty() {
+				gotine := m.awaitQueue.pop()
+				m.awaitQueue.signal()
+				m.mtx.Unlock()
+				atomic.AddInt32(&m.awaitCount, -1)
+				gotine.resume(m)
+				return
+			} else {
+				ok := false
+				for i, v := range queue {
+					if !v.empty() {
+						fn := v.pop()
+						v.signal()
+						m.mtx.Unlock()
+						if i == 0 {
+							if v == m.urgentQueue {
+								urgentCount++
+								if urgentCount >= 8 {
+									//防止normal饿死，urgent连续执行一定次数之后跟normal交换顺序
+									queue[0], queue[1] = queue[1], queue[0]
+								}
+							} else {
+								urgentCount = 0
+								queue[0], queue[1] = queue[1], queue[0]
+							}
+						}
+						fn()
+						ok = true
+						break
+					}
+				}
+
+				if ok {
+					break
+				} else if m.closed && atomic.LoadInt32(&m.awaitCount) == 0 {
+					m.mtx.Unlock()
+					close(m.closeCh)
+					return
+				} else {
+					m.wait()
+				}
+			}*/
 		}
 	}
 }
