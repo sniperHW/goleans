@@ -59,6 +59,8 @@ func (ring *ringqueue[T]) put(v T) {
 
 func (ring *ringqueue[T]) pop() T {
 	v := ring.queue[ring.head]
+	var zero T
+	ring.queue[ring.head] = zero
 	ring.head = (ring.head + 1) % len(ring.queue)
 	return v
 }
