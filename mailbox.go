@@ -30,6 +30,7 @@ type ringqueue[T any] struct {
 	tail      int
 	queue     []T
 	cond      *sync.Cond
+	locker    sync.Locker
 	waitCount int
 }
 
@@ -38,8 +39,9 @@ func newRingQueue[T any](cap int, l sync.Locker) *ringqueue[T] {
 		cap = 1
 	}
 	ring := &ringqueue[T]{
-		queue: make([]T, cap+1),
-		cond:  sync.NewCond(l),
+		queue:  make([]T, cap+1),
+		cond:   sync.NewCond(l),
+		locker: l,
 	}
 	return ring
 }
@@ -68,19 +70,21 @@ func (ring *ringqueue[T]) pop() T {
 func (ring *ringqueue[T]) wait() {
 	ring.waitCount++
 	ring.cond.Wait()
-	ring.waitCount--
+	//ring.waitCount--
 }
 
-func (ring *ringqueue[T]) signal() {
+func (ring *ringqueue[T]) signalAndUnlock() {
 	if ring.waitCount > 0 {
+		ring.waitCount--
+		ring.locker.Unlock()
 		ring.cond.Signal()
+	} else {
+		ring.locker.Unlock()
 	}
 }
 
 func (ring *ringqueue[T]) broadcast() {
-	if ring.waitCount > 0 {
-		ring.cond.Broadcast()
-	}
+	ring.cond.Broadcast()
 }
 
 type Mailbox struct {
@@ -91,7 +95,7 @@ type Mailbox struct {
 	closed      bool
 	awaitCount  int32
 	closeCh     chan struct{}
-	waitCount   int
+	waiting     bool
 	cond        *sync.Cond
 	awaitQueue  *ringqueue[*goroutine]
 	urgentQueue *ringqueue[func()]
@@ -115,72 +119,79 @@ func NewMailbox(opt MailboxOption) *Mailbox {
 	return m
 }
 
-func (m *Mailbox) signal() {
-	if m.waitCount > 0 {
+func (m *Mailbox) signalAndUnlock() {
+	if m.waiting {
+		m.waiting = false
+		m.mtx.Unlock()
 		m.cond.Signal()
+	} else {
+		m.mtx.Unlock()
 	}
 }
 
 func (m *Mailbox) wait() {
-	m.waitCount++
+	m.waiting = true
 	m.cond.Wait()
-	m.waitCount--
 }
 
 func (m *Mailbox) putAwait(g *goroutine) {
 	m.mtx.Lock()
-	defer m.mtx.Unlock()
 	for m.awaitQueue.full() {
 		m.awaitQueue.wait()
 	}
 	m.awaitQueue.put(g)
-	m.signal()
+	m.signalAndUnlock()
 }
 
 func (m *Mailbox) Input(fn func()) error {
 	m.mtx.Lock()
-	defer m.mtx.Unlock()
+	//defer m.mtx.Unlock()
 	if m.closed {
+		m.mtx.Unlock()
 		return errors.New("mailbox closed")
 	}
 	for m.normalQueue.full() {
 		m.normalQueue.wait()
 		if m.closed {
+			m.mtx.Unlock()
 			return errors.New("mailbox closed")
 		}
 	}
 	m.normalQueue.put(fn)
-	m.signal()
+	m.signalAndUnlock()
 	return nil
 }
 
 func (m *Mailbox) InputNoWait(fn func()) error {
 	m.mtx.Lock()
-	defer m.mtx.Unlock()
 	if m.closed {
+		m.mtx.Unlock()
 		return errors.New("mailbox closed")
 	} else if m.normalQueue.full() {
+		m.mtx.Unlock()
 		return errors.New("full")
 	}
 	m.normalQueue.put(fn)
-	m.signal()
+	m.signalAndUnlock()
 	return nil
 }
 
 func (m *Mailbox) InputUrgent(fn func()) error {
 	m.mtx.Lock()
-	defer m.mtx.Unlock()
+	//defer m.mtx.Unlock()
 	if m.closed {
+		m.mtx.Unlock()
 		return errors.New("mailbox closed")
 	}
 	for m.urgentQueue.full() {
 		m.urgentQueue.wait()
 		if m.closed {
+			m.mtx.Unlock()
 			return errors.New("mailbox closed")
 		}
 	}
 	m.urgentQueue.put(fn)
-	m.signal()
+	m.signalAndUnlock()
 	return nil
 }
 
@@ -232,21 +243,21 @@ func (co *goroutine) loop(m *Mailbox) {
 
 			if !m.awaitQueue.empty() {
 				gotine := m.awaitQueue.pop()
-				m.awaitQueue.signal()
-				m.mtx.Unlock()
+				m.awaitQueue.signalAndUnlock()
+				//m.mtx.Unlock()
 				atomic.AddInt32(&m.awaitCount, -1)
 				gotine.resume(m)
 				return
 			} else if !m.urgentQueue.empty() {
 				fn := m.urgentQueue.pop()
-				m.urgentQueue.signal()
-				m.mtx.Unlock()
+				m.urgentQueue.signalAndUnlock()
+				//m.mtx.Unlock()
 				fn()
 				break
 			} else if !m.normalQueue.empty() {
 				fn := m.normalQueue.pop()
-				m.normalQueue.signal()
-				m.mtx.Unlock()
+				m.normalQueue.signalAndUnlock()
+				//m.mtx.Unlock()
 				fn()
 				break
 			} else {
@@ -411,9 +422,10 @@ func (m *Mailbox) Close(wait bool) {
 		m.closed = true
 		m.normalQueue.broadcast()
 		m.urgentQueue.broadcast()
-		m.signal()
+		m.signalAndUnlock()
+	} else {
+		m.mtx.Unlock()
 	}
-	m.mtx.Unlock()
 
 	if wait {
 		<-m.closeCh

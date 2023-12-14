@@ -9,6 +9,30 @@ import (
 	"time"
 )
 
+func TestBenchmarkMailbox(t *testing.T) {
+	box := NewMailbox(MailboxOption{
+		UrgentQueueCap: 64,
+		NormalQueueCap: 64,
+		AwaitQueueCap:  64,
+	})
+
+	box.Start()
+	counter := int32(0)
+	go func() {
+		for {
+			box.Input(func() {
+				atomic.AddInt32(&counter, 1)
+			})
+		}
+	}()
+
+	for {
+		time.Sleep(time.Second)
+		fmt.Println(atomic.LoadInt32(&counter))
+		atomic.StoreInt32(&counter, 0)
+	}
+}
+
 /*func BenchmarkChannel(b *testing.B) {
 	box := make(chan func(), 64)
 

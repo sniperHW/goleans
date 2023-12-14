@@ -85,10 +85,11 @@ func (m *Mailbox) AfterFunc(d time.Duration, fn func()) *Timer {
 		if m.timer == nil {
 			m.timer = time.AfterFunc(d, func() {
 				m.mtx.Lock()
-				defer m.mtx.Unlock()
 				if !m.checkTimer {
 					m.checkTimer = true
-					m.signal()
+					m.signalAndUnlock()
+				} else {
+					m.mtx.Unlock()
 				}
 			})
 		} else {
