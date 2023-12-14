@@ -12,7 +12,7 @@ import (
 func TestBenchmarkMailbox(t *testing.T) {
 	box := NewMailbox(MailboxOption{
 		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
+		NormalQueueCap: 32,
 		AwaitQueueCap:  64,
 	})
 

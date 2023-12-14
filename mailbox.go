@@ -77,6 +77,11 @@ func (ring *ringqueue[T]) signalAndUnlock() {
 	if ring.waitCount > 0 {
 		ring.waitCount--
 		ring.locker.Unlock()
+		/*
+		 * Signal是否存在两次向同一个goroutine发信号的情况
+		 * 假设waitCount==2,signalAndUnlock执行两次waitCount=0
+		 * 如果两次信号都发送给goroutine1,将发生goroutine2在等待而waitCount==0
+		 */
 		ring.cond.Signal()
 	} else {
 		ring.locker.Unlock()
@@ -145,7 +150,6 @@ func (m *Mailbox) putAwait(g *goroutine) {
 
 func (m *Mailbox) Input(fn func()) error {
 	m.mtx.Lock()
-	//defer m.mtx.Unlock()
 	if m.closed {
 		m.mtx.Unlock()
 		return errors.New("mailbox closed")
@@ -178,7 +182,6 @@ func (m *Mailbox) InputNoWait(fn func()) error {
 
 func (m *Mailbox) InputUrgent(fn func()) error {
 	m.mtx.Lock()
-	//defer m.mtx.Unlock()
 	if m.closed {
 		m.mtx.Unlock()
 		return errors.New("mailbox closed")
@@ -231,8 +234,6 @@ var gotine_pool goroutine_pool = goroutine_pool{
 }
 
 func (co *goroutine) loop(m *Mailbox) {
-	//queue := []*ringqueue[func()]{m.urgentQueue, m.normalQueue}
-	//urgentCount := 0
 	for {
 		m.mtx.Lock()
 		for {
@@ -244,20 +245,17 @@ func (co *goroutine) loop(m *Mailbox) {
 			if !m.awaitQueue.empty() {
 				gotine := m.awaitQueue.pop()
 				m.awaitQueue.signalAndUnlock()
-				//m.mtx.Unlock()
 				atomic.AddInt32(&m.awaitCount, -1)
 				gotine.resume(m)
 				return
 			} else if !m.urgentQueue.empty() {
 				fn := m.urgentQueue.pop()
 				m.urgentQueue.signalAndUnlock()
-				//m.mtx.Unlock()
 				fn()
 				break
 			} else if !m.normalQueue.empty() {
 				fn := m.normalQueue.pop()
 				m.normalQueue.signalAndUnlock()
-				//m.mtx.Unlock()
 				fn()
 				break
 			} else {
@@ -268,49 +266,6 @@ func (co *goroutine) loop(m *Mailbox) {
 				}
 				m.wait()
 			}
-
-			/*if !m.awaitQueue.empty() {
-				gotine := m.awaitQueue.pop()
-				m.awaitQueue.signal()
-				m.mtx.Unlock()
-				atomic.AddInt32(&m.awaitCount, -1)
-				gotine.resume(m)
-				return
-			} else {
-				ok := false
-				for i, v := range queue {
-					if !v.empty() {
-						fn := v.pop()
-						v.signal()
-						m.mtx.Unlock()
-						if i == 0 {
-							if v == m.urgentQueue {
-								urgentCount++
-								if urgentCount >= 8 {
-									//防止normal饿死，urgent连续执行一定次数之后跟normal交换顺序
-									queue[0], queue[1] = queue[1], queue[0]
-								}
-							} else {
-								urgentCount = 0
-								queue[0], queue[1] = queue[1], queue[0]
-							}
-						}
-						fn()
-						ok = true
-						break
-					}
-				}
-
-				if ok {
-					break
-				} else if m.closed && atomic.LoadInt32(&m.awaitCount) == 0 {
-					m.mtx.Unlock()
-					close(m.closeCh)
-					return
-				} else {
-					m.wait()
-				}
-			}*/
 		}
 	}
 }
