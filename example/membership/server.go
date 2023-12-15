@@ -5,16 +5,16 @@ import (
 	"flag"
 	"os"
 
-	"github.com/sniperHW/clustergo/example/discovery"
+	"github.com/sniperHW/clustergo/example/membership"
 )
 
 func main() {
 
-	addr := flag.String("addr", "127.0.0.1:8110", "address of discovery")
+	addr := flag.String("addr", "127.0.0.1:8110", "address of membership service")
 	configPath := flag.String("membership", "membership.json", "membership")
 	flag.Parse()
 
-	var config []*discovery.Node
+	var config []*membership.Node
 	f, err := os.Open(*configPath)
 	if err != nil {
 		panic(err)
@@ -26,7 +26,7 @@ func main() {
 		panic(err)
 	}
 
-	svr := discovery.NewServer()
+	svr := membership.NewServer()
 
 	svr.Start(*addr, config)
 

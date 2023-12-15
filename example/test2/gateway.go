@@ -23,7 +23,7 @@ import (
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
-	"github.com/sniperHW/clustergo/example/discovery"
+	"github.com/sniperHW/clustergo/example/membership"
 	"github.com/sniperHW/clustergo/logger/zap"
 	"github.com/sniperHW/netgo"
 )
@@ -50,7 +50,7 @@ func main() {
 	clustergo.InitLogger(l.Sugar())
 	goleans.InitLogger(l.Sugar())
 	localaddr, _ := addr.MakeLogicAddr("1.2.1")
-	discoveryCli := discovery.NewClient(*discoveryAddr)
+	discoveryCli := membership.NewClient(*discoveryAddr)
 	pdClient := placement.NewCli(localaddr, *pdAddr)
 
 	clustergo.RegisterBinaryHandler(100, func(_ context.Context, _ addr.LogicAddr, _ uint16, msg []byte) {

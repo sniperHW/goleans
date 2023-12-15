@@ -11,7 +11,7 @@ import (
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
-	"github.com/sniperHW/clustergo/discovery"
+	"github.com/sniperHW/clustergo/membership"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -23,13 +23,13 @@ var (
 )
 
 // 不作为Silo启动
-func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver) error {
+func Start(memberShip membership.Client, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
 	})
 	if ok {
-		err := clustergo.Start(discovery, localAddr)
+		err := clustergo.Start(memberShip, localAddr)
 		if err != nil {
 			return err
 		}
@@ -50,13 +50,13 @@ func Start(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDri
 }
 
 // 作为Silo启动
-func StartSilo(discovery discovery.Discovery, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []GrainCfg, siloObjectFactory func(string) UserObject) error {
+func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []GrainCfg, siloObjectFactory func(string) UserObject) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
 	})
 	if ok {
-		err := clustergo.Start(discovery, localAddr)
+		err := clustergo.Start(memberShip, localAddr)
 		if err != nil {
 			return err
 		}
