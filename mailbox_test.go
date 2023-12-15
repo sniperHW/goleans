@@ -12,7 +12,7 @@ import (
 func TestBenchmarkMailbox(t *testing.T) {
 	box := NewMailbox(MailboxOption{
 		UrgentQueueCap: 64,
-		NormalQueueCap: 32,
+		NormalQueueCap: 64,
 		AwaitQueueCap:  64,
 	})
 
@@ -26,7 +26,42 @@ func TestBenchmarkMailbox(t *testing.T) {
 		}
 	}()
 
-	for {
+	end := time.Now().Add(time.Second * 5)
+
+	for time.Now().Before(end) {
+		time.Sleep(time.Second)
+		fmt.Println(atomic.LoadInt32(&counter))
+		atomic.StoreInt32(&counter, 0)
+	}
+}
+
+func TestBenchmarkAwait(t *testing.T) {
+	box := NewMailbox(MailboxOption{
+		UrgentQueueCap: 1,
+		NormalQueueCap: 64,
+		AwaitQueueCap:  1,
+	})
+
+	box.Start()
+	counter := int32(0)
+
+	//限定流速，避免同时触发太多goroutine执行Await
+	rateLimit := make(chan struct{}, 100)
+
+	end := time.Now().Add(time.Second * 5)
+
+	go func() {
+		for i := 0; ; i++ {
+			rateLimit <- struct{}{}
+			box.Input(func() {
+				box.Await(runtime.Gosched)
+				atomic.AddInt32(&counter, 1)
+				<-rateLimit
+			})
+		}
+	}()
+
+	for time.Now().Before(end) {
 		time.Sleep(time.Second)
 		fmt.Println(atomic.LoadInt32(&counter))
 		atomic.StoreInt32(&counter, 0)

@@ -70,18 +70,12 @@ func (ring *ringqueue[T]) pop() T {
 func (ring *ringqueue[T]) wait() {
 	ring.waitCount++
 	ring.cond.Wait()
-	//ring.waitCount--
 }
 
 func (ring *ringqueue[T]) signalAndUnlock() {
 	if ring.waitCount > 0 {
 		ring.waitCount--
 		ring.locker.Unlock()
-		/*
-		 * Signal是否存在两次向同一个goroutine发信号的情况
-		 * 假设waitCount==2,signalAndUnlock执行两次waitCount=0
-		 * 如果两次信号都发送给goroutine1,将发生goroutine2在等待而waitCount==0
-		 */
 		ring.cond.Signal()
 	} else {
 		ring.locker.Unlock()
@@ -246,7 +240,9 @@ func (co *goroutine) loop(m *Mailbox) {
 				gotine := m.awaitQueue.pop()
 				m.awaitQueue.signalAndUnlock()
 				atomic.AddInt32(&m.awaitCount, -1)
+				//1
 				gotine.resume(m)
+				//actor的执行将由Await.1继续，当前goroutine退出循环
 				return
 			} else if !m.urgentQueue.empty() {
 				fn := m.urgentQueue.pop()
@@ -367,7 +363,9 @@ func (m *Mailbox) Await(fn interface{}, args ...interface{}) (ret []interface{})
 	//将自己添加到待唤醒通道中
 	m.putAwait(current)
 	//等待被唤醒后继续执行
+	//loop.1.resume之后从yield返回
 	current.yield()
+	//1
 	return ret
 }
 
@@ -406,6 +404,7 @@ func (mtx *Mutex) Lock() {
 		mtx.m.sche()
 		//等待唤醒
 		current.yield()
+		//1
 	}
 }
 
