@@ -2,11 +2,12 @@ package goleans
 
 import (
 	"context"
-	"goleans/pd"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sniperHW/goleans/pd"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"

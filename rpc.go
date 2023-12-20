@@ -5,12 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"goleans/pd"
 	"reflect"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sniperHW/goleans/pd"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
@@ -27,6 +28,7 @@ const (
 	lenArg                = 4
 	lenReqHdr             = lenSeq + lenOneWay + lenMethod + lenIdentityLen
 	lenRspHdr             = lenSeq + lenErrCode
+	lenAddr               = 4
 	Actor_request         = 11311
 	Actor_response        = 11312
 	Actor_notify_redirect = 11313
@@ -95,12 +97,12 @@ func (req *RequestMsg) Encode() []byte {
 	binary.BigEndian.PutUint64(buff, req.Seq)
 
 	if req.Oneway {
-		buff[8] = byte(1)
+		buff[lenSeq] = byte(1)
 	}
 
-	binary.BigEndian.PutUint16(buff[9:], req.Method)
+	binary.BigEndian.PutUint16(buff[lenSeq+lenOneWay:], req.Method)
 
-	binary.BigEndian.PutUint16(buff[11:], uint16(len(req.To)))
+	binary.BigEndian.PutUint16(buff[lenSeq+lenOneWay+lenMethod:], uint16(len(req.To)))
 
 	buff = append(buff, []byte(req.To)...)
 
@@ -153,14 +155,14 @@ func (req *RequestMsg) Decode(buff []byte) error {
 
 func (resp *ResponseMsg) Encode() (buff []byte) {
 	if resp.ErrCode == ErrCodeRedirect {
-		buff = make([]byte, lenRspHdr+4)
+		buff = make([]byte, lenRspHdr+lenAddr)
 		binary.BigEndian.PutUint64(buff, resp.Seq)
-		binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
-		binary.BigEndian.PutUint32(buff[10:], uint32(resp.RedirectAddr))
+		binary.BigEndian.PutUint16(buff[lenSeq:], uint16(resp.ErrCode))
+		binary.BigEndian.PutUint32(buff[lenSeq+lenErrCode:], uint32(resp.RedirectAddr))
 	} else {
 		buff = make([]byte, lenRspHdr, lenRspHdr+len(resp.Ret))
 		binary.BigEndian.PutUint64(buff, resp.Seq)
-		binary.BigEndian.PutUint16(buff[8:], uint16(resp.ErrCode))
+		binary.BigEndian.PutUint16(buff[lenSeq:], uint16(resp.ErrCode))
 		buff = append(buff, resp.Ret...)
 	}
 	return buff
@@ -212,7 +214,7 @@ func (r *Replyer) SetReplyHook(hook func(_ *RequestMsg)) {
 func (r *Replyer) redirect(redirectAddr addr.LogicAddr) {
 	if r.req.Oneway {
 		//通告对端identity不在当前节点
-		buff := make([]byte, 4, len(r.req.To)+4)
+		buff := make([]byte, lenAddr, len(r.req.To)+lenAddr)
 		binary.BigEndian.PutUint32(buff, uint32(redirectAddr))
 		buff = append(buff, []byte(r.req.To)...)
 		r.node.SendBinMessage(r.from, Actor_notify_redirect, buff)
@@ -362,6 +364,17 @@ func (c *RPCClient) OnRPCResponse(resp *ResponseMsg) {
 	}
 }
 
+func rpcError(err error) error {
+	switch err {
+	case context.Canceled:
+		return ErrCallCancel
+	case context.DeadlineExceeded:
+		return ErrCallTimeout
+	default:
+		return err
+	}
+}
+
 func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method uint16, arg proto.Message, ret proto.Message) error {
 	if b, err := proto.Marshal(arg); err != nil {
 		return err
@@ -388,21 +401,13 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 					case clustergo.ErrPendingQueueFull, netgo.ErrSendQueueFull, netgo.ErrPushToSendQueueTimeout:
 						time.Sleep(time.Millisecond * 10)
 					default:
-						return err
+						return rpcError(err)
 					}
 				}
 
 				select {
 				case <-ctx.Done():
-					err = ctx.Err()
-					switch err {
-					case context.Canceled:
-						return ErrCallCancel
-					case context.DeadlineExceeded:
-						return ErrCallTimeout
-					default:
-						return err
-					}
+					return rpcError(ctx.Err())
 				default:
 				}
 			}
@@ -411,6 +416,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 			pending := &c.pendingCall[int(reqMessage.Seq)%len(c.pendingCall)]
 			wait := respWaitPool.Get().(chan *ResponseMsg)
 			for {
+				//Store不能像rpcgo一样移到for前面，因为case resp := <-wait:之后可能再次重发，如果移动到for前面将丢失上下文
 				pending.Store(reqMessage.Seq, wait)
 				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
 				if err != nil {
@@ -435,19 +441,10 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 							return getDescByErrCode(uint16(resp.ErrCode))
 						}
 					case <-ctx.Done():
-						_, ok := pending.LoadAndDelete(reqMessage.Seq)
-						if ok {
+						if _, ok := pending.LoadAndDelete(reqMessage.Seq); ok {
 							respWaitPool.Put(wait)
 						}
-						err = ctx.Err()
-						switch err {
-						case context.Canceled:
-							return ErrCallCancel
-						case context.DeadlineExceeded:
-							return ErrCallTimeout
-						default:
-							return err
-						}
+						return rpcError(ctx.Err())
 					}
 				} else {
 					//没有发出去
@@ -458,6 +455,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 						time.Sleep(time.Millisecond * 10)
 					default:
 						pending.Delete(reqMessage.Seq)
+						respWaitPool.Put(wait)
 						return err
 					}
 				}
@@ -465,17 +463,11 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method 
 				select {
 				case <-ctx.Done():
 					pending.Delete(reqMessage.Seq)
+					respWaitPool.Put(wait)
 					if err == ErrCallRetry {
 						return err
-					}
-					err = ctx.Err()
-					switch err {
-					case context.Canceled:
-						return ErrCallCancel
-					case context.DeadlineExceeded:
-						return ErrCallTimeout
-					default:
-						return err
+					} else {
+						return rpcError(ctx.Err())
 					}
 				default:
 				}

@@ -2,12 +2,13 @@ package main
 
 import (
 	"flag"
-	"goleans"
-	"goleans/example/grain"
-	"goleans/example/placement"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/sniperHW/goleans"
+	"github.com/sniperHW/goleans/example/grain"
+	"github.com/sniperHW/goleans/example/placement"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"

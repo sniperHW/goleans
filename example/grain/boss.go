@@ -3,10 +3,11 @@ package grain
 import (
 	"context"
 	"fmt"
-	"goleans"
 	"time"
 
-	"goleans/example/grain/rpc/service/test"
+	"github.com/sniperHW/goleans"
+
+	"github.com/sniperHW/goleans/example/grain/rpc/service/test"
 
 	"github.com/sniperHW/clustergo"
 )

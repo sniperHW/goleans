@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"goleans/pd"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sniperHW/goleans/pd"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"

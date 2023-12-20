@@ -2,9 +2,10 @@ package placement
 
 import (
 	"context"
-	"goleans/pd"
 	"testing"
 	"time"
+
+	"github.com/sniperHW/goleans/pd"
 
 	"github.com/sniperHW/clustergo/addr"
 	"go.uber.org/zap"

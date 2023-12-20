@@ -7,11 +7,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"goleans/pd"
-	"goleans/testproto/echo"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sniperHW/goleans/pd"
+	"github.com/sniperHW/goleans/testproto/echo"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
@@ -119,6 +120,7 @@ func (p *placementDriver) GetPlacement(selfAddr addr.LogicAddr, identity pd.Grai
 	defer p.Unlock()
 	silo, ok := p.placement[identity]
 	if ok {
+		logger.Debugf("GetPlacement 1 %v", silo.logicAddr.String())
 		return silo.logicAddr, nil
 	}
 
@@ -131,6 +133,7 @@ func (p *placementDriver) GetPlacement(selfAddr addr.LogicAddr, identity pd.Grai
 		silo := p.silos[i]
 		if silo.logicAddr != selfAddr {
 			p.nextSilo = (i + 1) % len(p.silos)
+			logger.Debugf("GetPlacement 2 %v", silo.logicAddr.String())
 			return silo.logicAddr, nil
 		} else {
 			i = (i + 1) % len(p.silos)
@@ -145,7 +148,9 @@ func (p *placementDriver) Deactivate(siloAddr addr.LogicAddr, identity pd.GrainI
 	p.Lock()
 	defer p.Unlock()
 	silo, ok := p.placement[identity]
+	logger.Debugf("Deactivate")
 	if ok && silo.logicAddr == siloAddr {
+		logger.Debugf("Deactivate %v", silo.logicAddr.String())
 		delete(silo.grains, identity)
 		delete(p.placement, identity)
 	}
@@ -154,17 +159,23 @@ func (p *placementDriver) Deactivate(siloAddr addr.LogicAddr, identity pd.GrainI
 func (p *placementDriver) Activate(siloAddr addr.LogicAddr, identity pd.GrainIdentity) error {
 	p.Lock()
 	defer p.Unlock()
+	logger.Debugf("Activate")
 	silo, ok := p.placement[identity]
-	if !ok || silo.logicAddr == siloAddr {
+	if !ok {
 		for _, v := range p.silos {
 			if v.logicAddr == siloAddr {
 				v.grains[identity] = struct{}{}
+				p.placement[identity] = v
+				logger.Debugf("Activate %v", siloAddr.String())
 				return nil
 			}
 		}
 		panic("siloAddr not found")
+	} else if silo.logicAddr == siloAddr {
+		return nil
+	} else {
+		return pd.ErrorRedirect{Addr: silo.logicAddr}
 	}
-	return pd.ErrorRedirect{Addr: silo.logicAddr}
 }
 
 type placementCache struct {
@@ -460,4 +471,288 @@ func TestGrain(t *testing.T) {
 	silo1.Stop()
 	node1.Stop()
 	node2.Stop()
+}
+
+func TestRedirect(t *testing.T) {
+
+	DefaultDeactiveTime = time.Second * 2
+	GrainTickInterval = time.Second
+
+	localDiscovery := &localMemberShip{
+		nodes: map[addr.LogicAddr]*membership.Node{},
+	}
+
+	node1Addr, _ := addr.MakeAddr("1.1.1", "localhost:28110")
+	node2Addr, _ := addr.MakeAddr("1.2.1", "localhost:28111")
+	node3Addr, _ := addr.MakeAddr("1.3.1", "localhost:28112")
+	node4Addr, _ := addr.MakeAddr("1.4.1", "localhost:28113")
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node1Addr,
+		Available: true,
+	})
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node2Addr,
+		Available: true,
+	})
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node3Addr,
+		Available: true,
+	})
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node4Addr,
+		Available: true,
+	})
+
+	pdServer := &placementDriver{
+		placement: map[pd.GrainIdentity]*pdSilo{},
+	}
+
+	node1 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	pdClient1 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node1Addr.LogicAddr(),
+	}
+	silo1 := createSilo(node1, pdClient1)
+
+	err := node1.Start(localDiscovery, node1Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	node2 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	pdClient2 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node2Addr.LogicAddr(),
+	}
+	silo2 := createSilo(node2, pdClient2)
+	err = node2.Start(localDiscovery, node2Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	node3 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	err = node3.Start(localDiscovery, node3Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	pdClient3 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node3Addr.LogicAddr(),
+	}
+
+	pdClient3.SetCacheTime(time.Second * 10)
+
+	rpcClient := NewRPCClient(node3, pdClient3)
+
+	node3.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		resp := ResponseMsg{}
+		if err := resp.Decode(msg); err != nil {
+			logger.Error(err)
+		} else {
+			logger.Debugf("resp from %v", from.String())
+			rpcClient.OnRPCResponse(&resp)
+		}
+	}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+		pdClient3.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
+	})
+
+	var resp echo.Response
+	err = rpcClient.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello",
+	}, &resp)
+
+	fmt.Println(err, &resp)
+
+	node4 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	err = node4.Start(localDiscovery, node4Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	pdClient4 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node3Addr.LogicAddr(),
+	}
+
+	rpcClient4 := NewRPCClient(node4, pdClient4)
+
+	node4.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		resp := ResponseMsg{}
+		if err := resp.Decode(msg); err != nil {
+			logger.Error(err)
+		} else {
+			logger.Debugf("resp from %v", from.String())
+			rpcClient4.OnRPCResponse(&resp)
+		}
+	}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+		pdClient4.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
+	})
+
+	time.Sleep(time.Second * 5)
+
+	err = rpcClient4.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello",
+	}, &resp)
+
+	fmt.Println(err, &resp)
+
+	err = rpcClient.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello",
+	}, &resp)
+
+	fmt.Println(err, &resp)
+
+	silo1.Stop()
+	silo2.Stop()
+	node1.Stop()
+	node2.Stop()
+	node3.Stop()
+	node4.Stop()
+
+	GrainTickInterval = time.Second * 30
+	DefaultDeactiveTime = time.Minute * 5
+}
+
+func TestOneway(t *testing.T) {
+
+	DefaultDeactiveTime = time.Second * 2
+	GrainTickInterval = time.Second
+
+	localDiscovery := &localMemberShip{
+		nodes: map[addr.LogicAddr]*membership.Node{},
+	}
+
+	node1Addr, _ := addr.MakeAddr("1.1.1", "localhost:28110")
+	node2Addr, _ := addr.MakeAddr("1.2.1", "localhost:28111")
+	node3Addr, _ := addr.MakeAddr("1.3.1", "localhost:28112")
+	node4Addr, _ := addr.MakeAddr("1.4.1", "localhost:28113")
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node1Addr,
+		Available: true,
+	})
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node2Addr,
+		Available: true,
+	})
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node3Addr,
+		Available: true,
+	})
+
+	localDiscovery.AddNode(&membership.Node{
+		Addr:      node4Addr,
+		Available: true,
+	})
+
+	pdServer := &placementDriver{
+		placement: map[pd.GrainIdentity]*pdSilo{},
+	}
+
+	node1 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	pdClient1 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node1Addr.LogicAddr(),
+	}
+	silo1 := createSilo(node1, pdClient1)
+
+	err := node1.Start(localDiscovery, node1Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	node2 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	pdClient2 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node2Addr.LogicAddr(),
+	}
+	silo2 := createSilo(node2, pdClient2)
+	err = node2.Start(localDiscovery, node2Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	node3 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	err = node3.Start(localDiscovery, node3Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	pdClient3 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node3Addr.LogicAddr(),
+	}
+
+	pdClient3.SetCacheTime(time.Second * 10)
+
+	rpcClient := NewRPCClient(node3, pdClient3)
+
+	node3.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		resp := ResponseMsg{}
+		if err := resp.Decode(msg); err != nil {
+			logger.Error(err)
+		} else {
+			logger.Debugf("resp from %v", from.String())
+			rpcClient.OnRPCResponse(&resp)
+		}
+	}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+		pdClient3.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
+	})
+
+	//var resp echo.Response
+	err = rpcClient.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello",
+	}, nil)
+
+	time.Sleep(time.Millisecond * 100)
+
+	node4 := clustergo.NewClusterNode(clustergo.JsonCodec{})
+	err = node4.Start(localDiscovery, node4Addr.LogicAddr())
+	assert.Nil(t, err)
+
+	pdClient4 := &placementDriverClient{
+		driver:     pdServer,
+		localCache: map[pd.GrainIdentity]placementCache{},
+		selfAddr:   node3Addr.LogicAddr(),
+	}
+
+	rpcClient4 := NewRPCClient(node4, pdClient4)
+
+	node4.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		resp := ResponseMsg{}
+		if err := resp.Decode(msg); err != nil {
+			logger.Error(err)
+		} else {
+			logger.Debugf("resp from %v", from.String())
+			rpcClient4.OnRPCResponse(&resp)
+		}
+	}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+		newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
+		pdClient4.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
+	})
+
+	time.Sleep(time.Second * 5)
+
+	err = rpcClient4.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello",
+	}, nil)
+
+	time.Sleep(time.Millisecond * 100)
+
+	err = rpcClient.Call(context.Background(), "sniperHW@User", 1, &echo.Request{
+		Msg: "Hello",
+	}, nil)
+
+	silo1.Stop()
+	silo2.Stop()
+	node1.Stop()
+	node2.Stop()
+	node3.Stop()
+	node4.Stop()
+
+	GrainTickInterval = time.Second * 30
+	DefaultDeactiveTime = time.Minute * 5
 }

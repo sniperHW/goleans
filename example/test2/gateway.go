@@ -5,10 +5,6 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
-	"goleans"
-	"goleans/example/codec"
-	"goleans/example/placement"
-	"goleans/pd"
 	"net"
 	"os"
 	"os/signal"
@@ -17,9 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"goleans/example/grain/rpc/service/login"
-	"goleans/example/grain/rpc/service/logout"
-	"goleans/example/grain/rpc/service/relaymsg"
+	"github.com/sniperHW/goleans"
+	"github.com/sniperHW/goleans/example/codec"
+	"github.com/sniperHW/goleans/example/placement"
+	"github.com/sniperHW/goleans/pd"
+
+	"github.com/sniperHW/goleans/example/grain/rpc/service/login"
+	"github.com/sniperHW/goleans/example/grain/rpc/service/logout"
+	"github.com/sniperHW/goleans/example/grain/rpc/service/relaymsg"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"

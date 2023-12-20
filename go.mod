@@ -1,4 +1,4 @@
-module goleans
+module github.com/sniperHW/goleans
 
 go 1.21.1
 

@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"goleans/example/codec"
 	"net"
 	"time"
+
+	"github.com/sniperHW/goleans/example/codec"
 
 	"github.com/sniperHW/netgo"
 )

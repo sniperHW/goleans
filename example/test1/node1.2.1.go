@@ -3,17 +3,18 @@ package main
 import (
 	"context"
 	"flag"
-	"goleans"
-	"goleans/example/placement"
-	"goleans/pd"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
-	"goleans/example/grain/rpc/service/echo"
-	"goleans/example/grain/rpc/service/test"
+	"github.com/sniperHW/goleans"
+	"github.com/sniperHW/goleans/example/placement"
+	"github.com/sniperHW/goleans/pd"
+
+	"github.com/sniperHW/goleans/example/grain/rpc/service/echo"
+	"github.com/sniperHW/goleans/example/grain/rpc/service/test"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"

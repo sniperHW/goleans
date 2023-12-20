@@ -3,14 +3,15 @@ package grain
 import (
 	"context"
 	"fmt"
-	"goleans"
 	"time"
 
-	"goleans/example/codec"
-	"goleans/example/grain/rpc/service/echo"
-	"goleans/example/grain/rpc/service/login"
-	"goleans/example/grain/rpc/service/logout"
-	"goleans/example/grain/rpc/service/relaymsg"
+	"github.com/sniperHW/goleans"
+
+	"github.com/sniperHW/goleans/example/codec"
+	"github.com/sniperHW/goleans/example/grain/rpc/service/echo"
+	"github.com/sniperHW/goleans/example/grain/rpc/service/login"
+	"github.com/sniperHW/goleans/example/grain/rpc/service/logout"
+	"github.com/sniperHW/goleans/example/grain/rpc/service/relaymsg"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"

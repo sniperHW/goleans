@@ -4,11 +4,12 @@ import (
 	"container/list"
 	"context"
 	"fmt"
-	"goleans/pd"
 	"reflect"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
+
+	"github.com/sniperHW/goleans/pd"
 
 	"google.golang.org/protobuf/proto"
 )
