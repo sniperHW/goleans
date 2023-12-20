@@ -79,7 +79,7 @@ func (m *Mailbox) AfterFunc(d time.Duration, fn func()) *Timer {
 		return nil
 	}
 
-	t := timerPool.Get().(*Timer) //&Timer{
+	t := timerPool.Get().(*Timer)
 	t.deadline = time.Now().Add(d)
 	t.fn = fn
 	t.fired.Store(false)
@@ -111,13 +111,13 @@ func (m *Mailbox) doTimer() {
 	if m.checkTimer {
 		now := time.Now()
 		for len(m.timers) > 0 {
-			min := m.timers[0]
-			if now.After(min.deadline) {
+			near := m.timers[0]
+			if now.After(near.deadline) {
 				heap.Pop(&m.timedHeap)
 				m.mtx.Unlock()
-				min.call()
+				near.call()
 				m.mtx.Lock()
-				timerPool.Put(min)
+				timerPool.Put(near)
 			} else {
 				break
 			}
