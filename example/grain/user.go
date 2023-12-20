@@ -42,7 +42,7 @@ func (u *User) SendToUser(msg *codec.Message) {
 func (u *User) ServeEcho(ctx context.Context, replyer *echo.Replyer, arg *echo.EchoReq) {
 	time.Sleep(time.Second * 2) //阻塞当前grain
 	replyer.Reply(&echo.EchoRsp{
-		Msg: fmt.Sprintf("echo response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grain.Identity, arg.Msg),
+		Msg: fmt.Sprintf("echo response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grain.Pid(), arg.Msg),
 	})
 }
 
@@ -64,7 +64,7 @@ func (u *User) ServeLogout(ctx context.Context, replyer *logout.Replyer, arg *lo
 	resp := &logout.LogoutRsp{}
 	if u.gateUser != nil && u.gateUser.gateAddr == addr.LogicAddr(arg.GateAddr) && u.gateUser.gateUserID == uint64(arg.GateUserID) {
 		u.gateUser = nil
-		goleans.GetLogger().Debugf("%s logout", u.grain.Identity)
+		goleans.GetLogger().Debugf("%s logout", u.grain.Pid())
 	}
 	replyer.Reply(resp)
 }

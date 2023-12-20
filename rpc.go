@@ -23,10 +23,10 @@ const (
 	lenSeq                = 8
 	lenOneWay             = 1
 	lenMethod             = 2
-	lenIdentityLen        = 2
+	lenPidLen             = 2
 	lenErrCode            = 2
 	lenArg                = 4
-	lenReqHdr             = lenSeq + lenOneWay + lenMethod + lenIdentityLen
+	lenReqHdr             = lenSeq + lenOneWay + lenMethod + lenPidLen
 	lenRspHdr             = lenSeq + lenErrCode
 	lenAddr               = 4
 	Actor_request         = 11311
@@ -74,7 +74,7 @@ type RequestMsg struct {
 	Seq    uint64
 	Method uint16
 	Oneway bool
-	To     pd.GrainIdentity
+	To     pd.Pid
 	Arg    []byte
 	arg    proto.Message
 }
@@ -133,16 +133,16 @@ func (req *RequestMsg) Decode(buff []byte) error {
 	req.Method = binary.BigEndian.Uint16(buff[r:])
 	r += lenMethod
 
-	if buffLen-r < lenIdentityLen {
+	if buffLen-r < lenPidLen {
 		return errors.New("invaild request packet")
 	}
 	lenIdentity := int(binary.BigEndian.Uint16(buff[r:]))
-	r += lenIdentityLen
+	r += lenPidLen
 
 	if buffLen-r < lenIdentity {
 		return errors.New("invaild request packet")
 	}
-	req.To = pd.GrainIdentity(buff[r : r+lenIdentity])
+	req.To = pd.Pid(buff[r : r+lenIdentity])
 	r += lenIdentity
 
 	if buffLen-r > 0 {
@@ -375,7 +375,7 @@ func rpcError(err error) error {
 	}
 }
 
-func (c *RPCClient) Call(ctx context.Context, identity pd.GrainIdentity, method uint16, arg proto.Message, ret proto.Message) error {
+func (c *RPCClient) Call(ctx context.Context, identity pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
 	if b, err := proto.Marshal(arg); err != nil {
 		return err
 	} else {

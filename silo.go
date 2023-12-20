@@ -36,7 +36,7 @@ var (
 
 type Silo struct {
 	sync.RWMutex
-	grains            map[pd.GrainIdentity]*Grain
+	grains            map[pd.Pid]*Grain
 	grainList         map[string]GrainCfg
 	node              *clustergo.Node
 	placementDriver   pd.PlacementDriver
@@ -46,7 +46,7 @@ type Silo struct {
 
 func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, grainList []GrainCfg, userObjectFactory func(string) UserObject) (*Silo, error) {
 	s := &Silo{
-		grains:            map[pd.GrainIdentity]*Grain{},
+		grains:            map[pd.Pid]*Grain{},
 		node:              node,
 		placementDriver:   placementDriver,
 		userObjectFactory: userObjectFactory,
@@ -80,7 +80,7 @@ func (s *Silo) getMetric() pd.Metric {
 func (s *Silo) removeGrain(grain *Grain) {
 	s.Lock()
 	defer s.Unlock()
-	delete(s.grains, grain.Identity)
+	delete(s.grains, grain.pid)
 }
 
 func (s *Silo) Stop() {
@@ -118,7 +118,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 		return
 	}
 
-	identity := pd.GrainIdentity(req.To)
+	identity := pd.Pid(req.To)
 
 	t := strings.Split(string(identity), "@")
 
@@ -150,13 +150,13 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 			cancel()
 			switch err := err.(type) {
 			case pd.ErrorRedirect:
-				logger.Errorf("Activate Grain:%s redirect to:%s", grain.Identity, err.Addr.String())
+				logger.Errorf("Activate Grain:%s redirect to:%s", grain.Pid(), err.Addr.String())
 				replyer.redirect(err.Addr)
 				s.removeGrain(grain)
 				grain.mailbox.Close(false)
 				return
 			case error:
-				logger.Errorf("Activate Grain:%s error:%v", grain.Identity, err)
+				logger.Errorf("Activate Grain:%s error:%v", grain.Pid(), err)
 				replyer.error(ErrCodeRetryAgain)
 				s.removeGrain(grain)
 				grain.mailbox.Close(false)
@@ -169,7 +169,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 		if grain.state == grain_activated {
 			if grain.userObject == nil {
 				if userObj := s.userObjectFactory(grainType); nil == userObj {
-					logger.Errorf("Create Grain:%s Failed", grain.Identity)
+					logger.Errorf("Create Grain:%s Failed", grain.Pid())
 					grain.deactive(nil)
 					replyer.redirect(addr.LogicAddr(0))
 					return
@@ -179,7 +179,7 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 			}
 
 			if err := grain.userObject.Init(grain); err != nil {
-				logger.Errorf("Create Grain:%s Init error:%e", grain.Identity, err)
+				logger.Errorf("Create Grain:%s Init error:%e", grain.Pid(), err)
 				if err == ErrInitUnRetryAbleError {
 					//通告调用方，调用不应再尝试
 					replyer.error(ErrCodeUserGrainInitError)

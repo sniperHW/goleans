@@ -31,7 +31,7 @@ import (
 
 type gateUser struct {
 	id       uint64
-	identity pd.GrainIdentity
+	identity pd.Pid
 	conn     netgo.Socket
 }
 
@@ -79,7 +79,7 @@ func main() {
 
 			u := &gateUser{
 				id:       atomic.AddUint64(&nextID, 1),
-				identity: pd.GrainIdentity(fmt.Sprintf("%s@User", string(account))),
+				identity: pd.Pid(fmt.Sprintf("%s@User", string(account))),
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)

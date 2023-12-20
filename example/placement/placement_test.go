@@ -5,9 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sniperHW/goleans/pd"
-
 	"github.com/sniperHW/clustergo/addr"
+	"github.com/sniperHW/goleans/pd"
 	"go.uber.org/zap"
 )
 
@@ -33,7 +32,7 @@ func TestPlacement(t *testing.T) {
 		return pd.Metric{}
 	})
 
-	err = cli1.Login(context.Background())
+	err = cli1.Login(context.Background(), []string{"User"})
 	if err != nil {
 		panic(err)
 	}

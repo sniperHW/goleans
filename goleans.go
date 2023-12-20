@@ -85,7 +85,7 @@ func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placement
 			}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 				if len(msg) > 4 {
 					newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
-					placementDriver.ResetPlacementCache(pd.GrainIdentity(msg[4:]), newAddr)
+					placementDriver.ResetPlacementCache(pd.Pid(msg[4:]), newAddr)
 				}
 			})
 		}
@@ -105,7 +105,7 @@ func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placement
 	return nil
 }
 
-func Call(ctx context.Context, identity pd.GrainIdentity, method uint16, arg proto.Message, ret proto.Message) error {
+func Call(ctx context.Context, identity pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
 	if !started.Load() {
 		return errors.New("not started")
 	}

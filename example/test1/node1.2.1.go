@@ -45,7 +45,7 @@ func main() {
 			begin := time.Now()
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-				resp, err := echo.Call(ctx, pd.GrainIdentity("sniperHW1@User"), &echo.EchoReq{
+				resp, err := echo.Call(ctx, pd.Pid("sniperHW1@User"), &echo.EchoReq{
 					Msg: "hello sniperHW1",
 				})
 				cancel()
@@ -59,7 +59,7 @@ func main() {
 
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-				resp, err := echo.Call(ctx, pd.GrainIdentity("sniperHW1@User"), &echo.EchoReq{
+				resp, err := echo.Call(ctx, pd.Pid("sniperHW1@User"), &echo.EchoReq{
 					Msg: "hello sniperHW1",
 				})
 				cancel()
@@ -86,7 +86,7 @@ func main() {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 				defer cancel()
-				resp, err := test.Call(ctx, pd.GrainIdentity("sniperHW2@Boss"), &test.TestReq{
+				resp, err := test.Call(ctx, pd.Pid("sniperHW2@Boss"), &test.TestReq{
 					Msg: "hello sniperHW2",
 				})
 				if err == nil {
@@ -100,7 +100,7 @@ func main() {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 				defer cancel()
-				resp, err := test.Call(ctx, pd.GrainIdentity("sniperHW2@Boss"), &test.TestReq{
+				resp, err := test.Call(ctx, pd.Pid("sniperHW2@Boss"), &test.TestReq{
 					Msg: "hello sniperHW2",
 				})
 				if err == nil {

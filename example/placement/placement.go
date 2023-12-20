@@ -75,7 +75,7 @@ type HeartbeatResp struct {
 
 type ActivateReq struct {
 	Addr     addr.LogicAddr
-	Identity pd.GrainIdentity
+	Identity pd.Pid
 }
 
 type ActivateResp struct {
@@ -84,14 +84,14 @@ type ActivateResp struct {
 
 type DeactivateReq struct {
 	Addr     addr.LogicAddr
-	Identity pd.GrainIdentity
+	Identity pd.Pid
 }
 
 type DeactivateResp struct {
 }
 
 type GetPlacementReq struct {
-	Identity pd.GrainIdentity
+	Identity pd.Pid
 }
 
 type GetPlacementResp struct {
@@ -277,15 +277,15 @@ type silo struct {
 }
 
 type tmpPlacement struct {
-	identity pd.GrainIdentity
+	identity pd.Pid
 	addr     addr.LogicAddr
 	timer    *time.Timer
 }
 
 type placementSvr struct {
 	sync.Mutex
-	Placement     map[pd.GrainIdentity]addr.LogicAddr
-	tempPlacement map[pd.GrainIdentity]*tmpPlacement
+	Placement     map[pd.Pid]addr.LogicAddr
+	tempPlacement map[pd.Pid]*tmpPlacement
 	Silos         map[addr.LogicAddr]*silo
 	storage       *os.File
 	siloArray     map[string][]*silo //可供分配的silo
@@ -318,8 +318,8 @@ func NewServer(storage string) (*placementSvr, error) {
 	}
 
 	svr := &placementSvr{
-		Placement:     map[pd.GrainIdentity]addr.LogicAddr{},
-		tempPlacement: map[pd.GrainIdentity]*tmpPlacement{},
+		Placement:     map[pd.Pid]addr.LogicAddr{},
+		tempPlacement: map[pd.Pid]*tmpPlacement{},
 		Silos:         map[addr.LogicAddr]*silo{},
 		siloArray:     map[string][]*silo{},
 	}
@@ -556,7 +556,7 @@ type placementCache struct {
 type placementCli struct {
 	sync.Mutex
 	callMtx    sync.Mutex
-	localCache map[pd.GrainIdentity]placementCache
+	localCache map[pd.Pid]placementCache
 	selfAddr   addr.LogicAddr
 	getMetric  func() pd.Metric
 	cacheTime  time.Duration
@@ -569,7 +569,7 @@ type placementCli struct {
 
 func NewCli(selfAddr addr.LogicAddr, server string) *placementCli {
 	cli := &placementCli{
-		localCache: map[pd.GrainIdentity]placementCache{},
+		localCache: map[pd.Pid]placementCache{},
 		selfAddr:   selfAddr,
 		server:     server,
 		closed:     make(chan struct{}),
@@ -720,7 +720,7 @@ func (cli *placementCli) MarkUnAvaliable() {
 	return
 }
 
-func (cli *placementCli) ResetPlacementCache(identity pd.GrainIdentity, newAddr addr.LogicAddr) {
+func (cli *placementCli) ResetPlacementCache(identity pd.Pid, newAddr addr.LogicAddr) {
 	cli.Lock()
 	defer cli.Unlock()
 	if newAddr.Empty() {
@@ -733,7 +733,7 @@ func (cli *placementCli) ResetPlacementCache(identity pd.GrainIdentity, newAddr 
 	}
 }
 
-func (cli *placementCli) Activate(ctx context.Context, identity pd.GrainIdentity) error {
+func (cli *placementCli) Activate(ctx context.Context, identity pd.Pid) error {
 	req := &Message{
 		PayLoad: &ActivateReq{
 			Identity: identity,
@@ -758,7 +758,7 @@ func (cli *placementCli) Activate(ctx context.Context, identity pd.GrainIdentity
 	}
 }
 
-func (cli *placementCli) Deactivate(ctx context.Context, identity pd.GrainIdentity) error {
+func (cli *placementCli) Deactivate(ctx context.Context, identity pd.Pid) error {
 	req := &Message{
 		PayLoad: &DeactivateReq{
 			Identity: identity,
@@ -777,7 +777,7 @@ func (cli *placementCli) Deactivate(ctx context.Context, identity pd.GrainIdenti
 	return nil
 }
 
-func (cli *placementCli) GetPlacement(ctx context.Context, identity pd.GrainIdentity) (addr.LogicAddr, error) {
+func (cli *placementCli) GetPlacement(ctx context.Context, identity pd.Pid) (addr.LogicAddr, error) {
 	cli.Lock()
 	defer cli.Unlock()
 	cache, ok := cli.localCache[identity]

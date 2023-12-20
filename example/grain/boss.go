@@ -20,7 +20,7 @@ type Boss struct {
 func (u *Boss) ServeTest(ctx context.Context, replyer *test.Replyer, arg *test.TestReq) {
 	u.grain.Await(time.Sleep, time.Second*2) //不会阻塞当前grain，可以继续处理请求
 	replyer.Reply(&test.TestRsp{
-		Msg: fmt.Sprintf("test response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grain.Identity, arg.Msg),
+		Msg: fmt.Sprintf("test response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grain.Pid(), arg.Msg),
 	})
 }
 

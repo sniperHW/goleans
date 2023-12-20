@@ -41,7 +41,7 @@ const (
 
 type Grain struct {
 	mailbox      *Mailbox
-	Identity     pd.GrainIdentity
+	pid          pd.Pid
 	methods      map[uint16]*methodCaller
 	userObject   UserObject
 	lastRequest  atomic.Value
@@ -52,7 +52,7 @@ type Grain struct {
 	before       []func(*Replyer, *RequestMsg) bool //前置管道线
 }
 
-func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
+func newGrain(silo *Silo, pid pd.Pid, grainType string) *Grain {
 
 	grainCfg, ok := silo.grainList[grainType]
 	if !ok {
@@ -60,9 +60,9 @@ func newGrain(silo *Silo, identity pd.GrainIdentity, grainType string) *Grain {
 	}
 
 	grain := &Grain{
-		silo:     silo,
-		Identity: identity,
-		methods:  map[uint16]*methodCaller{},
+		silo:    silo,
+		pid:     pid,
+		methods: map[uint16]*methodCaller{},
 		mailbox: NewMailbox(MailboxOption{
 			UrgentQueueCap: grainCfg.NormalBoxCap,
 			NormalQueueCap: grainCfg.UrgentBoxCap,
@@ -86,8 +86,8 @@ func (grain *Grain) SetDeactiveTime(deactiveTime time.Duration) {
 	grain.deactiveTime = deactiveTime
 }
 
-func (grain *Grain) GetIdentity() pd.GrainIdentity {
-	return grain.Identity
+func (grain *Grain) Pid() pd.Pid {
+	return grain.pid
 }
 
 func (grain *Grain) Await(fn interface{}, args ...interface{}) (ret []interface{}) {
@@ -121,7 +121,7 @@ func (grain *Grain) deactive(fn func()) {
 		if grain.state != grain_un_activate {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
-			grain.silo.placementDriver.Deactivate(ctx, grain.Identity)
+			grain.silo.placementDriver.Deactivate(ctx, grain.pid)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func (grain *Grain) tick() {
 			if grain.userObject == nil {
 				grain.deactive(nil)
 			} else if err := grain.userObject.Deactivate(); err != nil {
-				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grain.Identity, err)
+				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grain.pid, err)
 				grain.AfterFunc(time.Second, grain.tick)
 			} else {
 				grain.deactive(nil)
@@ -203,7 +203,7 @@ func (grain *Grain) onSiloStop(fn func()) {
 			}
 
 			if err != nil {
-				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grain.Identity, err)
+				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grain.pid, err)
 			}
 
 			grain.deactive(fn)
