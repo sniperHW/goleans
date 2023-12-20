@@ -4,9 +4,14 @@ import (
 	"container/heap"
 	"fmt"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 )
+
+var timerPool = sync.Pool{
+	New: func() interface{} { return &Timer{} },
+}
 
 type Timer struct {
 	deadline time.Time
@@ -74,10 +79,10 @@ func (m *Mailbox) AfterFunc(d time.Duration, fn func()) *Timer {
 		return nil
 	}
 
-	t := &Timer{
-		deadline: time.Now().Add(d),
-		fn:       fn,
-	}
+	t := timerPool.Get().(*Timer) //&Timer{
+	t.deadline = time.Now().Add(d)
+	t.fn = fn
+	t.fired.Store(false)
 
 	heap.Push(&m.timedHeap, t)
 	if !m.checkTimer && t == m.timers[0] {
@@ -112,6 +117,7 @@ func (m *Mailbox) doTimer() {
 				m.mtx.Unlock()
 				min.call()
 				m.mtx.Lock()
+				timerPool.Put(min)
 			} else {
 				break
 			}
