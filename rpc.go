@@ -375,12 +375,18 @@ func rpcError(err error) error {
 	}
 }
 
-func (c *RPCClient) Call(ctx context.Context, identity pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
+func (c *RPCClient) CallWithTimeout(pid pd.Pid, method uint16, arg proto.Message, ret proto.Message, d time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	return c.Call(ctx, pid, method, arg, ret)
+}
+
+func (c *RPCClient) Call(ctx context.Context, pid pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
 	if b, err := proto.Marshal(arg); err != nil {
 		return err
 	} else {
 		reqMessage := &RequestMsg{
-			To:     identity,
+			To:     pid,
 			Seq:    c.makeSequence(),
 			Method: method,
 			Arg:    b,
@@ -389,7 +395,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.Pid, method uint16, ar
 			reqMessage.Oneway = true
 			req := reqMessage.Encode()
 			for {
-				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
+				remoteAddr, err := c.placementDriver.GetPlacement(ctx, pid)
 				if err != nil {
 					time.Sleep(time.Millisecond * 10)
 				} else if err = c.node.SendBinMessageWithContext(ctx, remoteAddr, Actor_request, req); err == nil {
@@ -397,7 +403,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.Pid, method uint16, ar
 				} else {
 					switch err {
 					case clustergo.ErrInvaildNode:
-						c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+						c.placementDriver.ResetPlacementCache(pid, addr.LogicAddr(0))
 					case clustergo.ErrPendingQueueFull, netgo.ErrSendQueueFull, netgo.ErrPushToSendQueueTimeout:
 						time.Sleep(time.Millisecond * 10)
 					default:
@@ -418,7 +424,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.Pid, method uint16, ar
 			for {
 				//Store不能像rpcgo一样移到for前面，因为case resp := <-wait:之后可能再次重发，如果移动到for前面将丢失上下文
 				pending.Store(reqMessage.Seq, wait)
-				remoteAddr, err := c.placementDriver.GetPlacement(ctx, identity)
+				remoteAddr, err := c.placementDriver.GetPlacement(ctx, pid)
 				if err != nil {
 					time.Sleep(time.Millisecond * 10)
 				} else if err = c.node.SendBinMessageWithContext(ctx, remoteAddr, Actor_request, req); err == nil {
@@ -430,7 +436,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.Pid, method uint16, ar
 						case ErrCodeOk:
 							return proto.Unmarshal(resp.Ret, ret)
 						case ErrCodeRedirect:
-							c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(resp.RedirectAddr))
+							c.placementDriver.ResetPlacementCache(pid, addr.LogicAddr(resp.RedirectAddr))
 							if resp.RedirectAddr == 0 {
 								time.Sleep(time.Millisecond * 10)
 							}
@@ -450,7 +456,7 @@ func (c *RPCClient) Call(ctx context.Context, identity pd.Pid, method uint16, ar
 					//没有发出去
 					switch err {
 					case clustergo.ErrInvaildNode:
-						c.placementDriver.ResetPlacementCache(identity, addr.LogicAddr(0))
+						c.placementDriver.ResetPlacementCache(pid, addr.LogicAddr(0))
 					case clustergo.ErrPendingQueueFull, netgo.ErrSendQueueFull, netgo.ErrPushToSendQueueTimeout:
 						time.Sleep(time.Millisecond * 10)
 					default:

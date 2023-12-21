@@ -3,8 +3,9 @@ package test
 
 import (
 	"context"
-	"goleans"
-	"goleans/pd"
+	"github.com/sniperHW/goleans"
+	"github.com/sniperHW/goleans/pd"
+	"time"
 )
 
 type Replyer struct {
@@ -26,8 +27,15 @@ func Register(grain *goleans.Grain,o Test) error {
 }
 
 
-func Call(ctx context.Context,identity pd.GrainIdentity,arg *TestReq) (*TestRsp,error) {
+func Call(ctx context.Context,pid pd.Pid,arg *TestReq) (*TestRsp,error) {
 	var resp TestRsp
-	err := goleans.Call(ctx,identity,1,arg,&resp)
+	err := goleans.Call(ctx,pid,1,arg,&resp)
 	return &resp,err
 }
+
+func CallWithTimeout(pid pd.Pid,arg *TestReq,d time.Duration) (*TestRsp,error) {
+	var resp TestRsp
+	err := goleans.CallWithTimeout(pid,1,arg,&resp,d)
+	return &resp,err
+}
+

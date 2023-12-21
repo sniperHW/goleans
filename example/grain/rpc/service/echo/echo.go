@@ -3,8 +3,9 @@ package echo
 
 import (
 	"context"
-	"goleans"
-	"goleans/pd"
+	"github.com/sniperHW/goleans"
+	"github.com/sniperHW/goleans/pd"
+	"time"
 )
 
 type Replyer struct {
@@ -26,8 +27,15 @@ func Register(grain *goleans.Grain,o Echo) error {
 }
 
 
-func Call(ctx context.Context,identity pd.GrainIdentity,arg *EchoReq) (*EchoRsp,error) {
+func Call(ctx context.Context,pid pd.Pid,arg *EchoReq) (*EchoRsp,error) {
 	var resp EchoRsp
-	err := goleans.Call(ctx,identity,2,arg,&resp)
+	err := goleans.Call(ctx,pid,2,arg,&resp)
 	return &resp,err
 }
+
+func CallWithTimeout(pid pd.Pid,arg *EchoReq,d time.Duration) (*EchoRsp,error) {
+	var resp EchoRsp
+	err := goleans.CallWithTimeout(pid,2,arg,&resp,d)
+	return &resp,err
+}
+

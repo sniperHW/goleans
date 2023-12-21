@@ -105,11 +105,18 @@ func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placement
 	return nil
 }
 
-func Call(ctx context.Context, identity pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
+func Call(ctx context.Context, pid pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
 	if !started.Load() {
 		return errors.New("not started")
 	}
-	return rpcClient.Call(ctx, identity, method, arg, ret)
+	return rpcClient.Call(ctx, pid, method, arg, ret)
+}
+
+func CallWithTimeout(pid pd.Pid, method uint16, arg proto.Message, ret proto.Message, d time.Duration) error {
+	if !started.Load() {
+		return errors.New("not started")
+	}
+	return rpcClient.CallWithTimeout(pid, method, arg, ret, d)
 }
 
 func Stop() {

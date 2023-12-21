@@ -2,10 +2,11 @@ package main
 
 import (
 	"flag"
-	"goleans/example/placement"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/sniperHW/goleans/example/placement"
 
 	"go.uber.org/zap"
 )
