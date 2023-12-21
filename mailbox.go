@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"errors"
 	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -88,23 +89,26 @@ func (ring *ringqueue[T]) broadcast() {
 
 type Mailbox struct {
 	timedHeap
-	mtx         sync.Mutex
-	current     *goroutine
-	startOnce   sync.Once
-	closed      bool
-	awaitCount  int32
-	closeCh     chan struct{}
-	waiting     bool
-	cond        *sync.Cond
-	awaitQueue  *ringqueue[*goroutine]
-	urgentQueue *ringqueue[func()]
-	normalQueue *ringqueue[func()]
+	mtx                sync.Mutex
+	current            *goroutine
+	startOnce          sync.Once
+	closed             bool
+	awaitCount         atomic.Int32
+	continueTaskLimits int //>0，连续执行continueTaskLimits个任务后让出时间片，避免其他actor饥饿。
+	closeCh            chan struct{}
+	waiting            bool
+	suspended          bool
+	cond               *sync.Cond
+	awaitQueue         *ringqueue[*goroutine]
+	urgentQueue        *ringqueue[func()]
+	normalQueue        *ringqueue[func()]
 }
 
 type MailboxOption struct {
-	UrgentQueueCap int
-	NormalQueueCap int
-	AwaitQueueCap  int
+	UrgentQueueCap     int
+	NormalQueueCap     int
+	AwaitQueueCap      int
+	ContinueTaskLimits int
 }
 
 func NewMailbox(opt MailboxOption) *Mailbox {
@@ -113,8 +117,9 @@ func NewMailbox(opt MailboxOption) *Mailbox {
 	}
 	m.awaitQueue = newRingQueue[*goroutine](opt.AwaitQueueCap, &m.mtx)
 	m.urgentQueue = newRingQueue[func()](opt.UrgentQueueCap, &m.mtx)
-	m.normalQueue = newRingQueue[func()](opt.AwaitQueueCap, &m.mtx)
+	m.normalQueue = newRingQueue[func()](opt.NormalQueueCap, &m.mtx)
 	m.cond = sync.NewCond(&m.mtx)
+	m.continueTaskLimits = opt.ContinueTaskLimits
 	return m
 }
 
@@ -228,7 +233,13 @@ var gotine_pool goroutine_pool = goroutine_pool{
 }
 
 func (co *goroutine) loop(m *Mailbox) {
+	c := 0
 	for {
+		if m.continueTaskLimits > 0 && c > m.continueTaskLimits {
+			c = 0
+			runtime.Gosched()
+		}
+		c++
 		m.mtx.Lock()
 		for {
 
@@ -239,7 +250,7 @@ func (co *goroutine) loop(m *Mailbox) {
 			if !m.awaitQueue.empty() {
 				gotine := m.awaitQueue.pop()
 				m.awaitQueue.signalAndUnlock()
-				atomic.AddInt32(&m.awaitCount, -1)
+				m.awaitCount.Add(-1)
 				//1
 				gotine.resume(m)
 				//actor的执行将由Await.1继续，当前goroutine退出循环
@@ -249,19 +260,43 @@ func (co *goroutine) loop(m *Mailbox) {
 				m.urgentQueue.signalAndUnlock()
 				fn()
 				break
+			} else if m.suspended {
+				if m.closed && m.awaitCount.Load() == 0 && m.normalQueue.empty() {
+					m.mtx.Unlock()
+					close(m.closeCh)
+					return
+				} else {
+					m.wait()
+					c = 0
+				}
 			} else if !m.normalQueue.empty() {
 				fn := m.normalQueue.pop()
 				m.normalQueue.signalAndUnlock()
 				fn()
 				break
 			} else {
-				if m.closed && atomic.LoadInt32(&m.awaitCount) == 0 {
+				if m.closed && m.awaitCount.Load() == 0 {
 					m.mtx.Unlock()
 					close(m.closeCh)
 					return
 				}
 				m.wait()
+				c = 0
 			}
+			/* else if !m.normalQueue.empty() {
+				fn := m.normalQueue.pop()
+				m.normalQueue.signalAndUnlock()
+				fn()
+				break
+			} else {
+				if m.closed && m.awaitCount.Load() == 0 {
+					m.mtx.Unlock()
+					close(m.closeCh)
+					return
+				}
+				m.wait()
+				c = 0
+			}*/
 		}
 	}
 }
@@ -293,6 +328,18 @@ func (m *Mailbox) Empty() bool {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	return m.urgentQueue.empty() && m.normalQueue.empty()
+}
+
+func (m *Mailbox) Suspend() {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	m.suspended = true
+}
+
+func (m *Mailbox) Resume() {
+	m.mtx.Lock()
+	m.suspended = false
+	m.signalAndUnlock()
 }
 
 func call(fn interface{}, args ...interface{}) (result []interface{}) {
@@ -354,7 +401,7 @@ func call(fn interface{}, args ...interface{}) (result []interface{}) {
 
 // fn将与m的任务队列并行执行，因此fn中不能访问线程不安全的数据
 func (m *Mailbox) Await(fn interface{}, args ...interface{}) (ret []interface{}) {
-	atomic.AddInt32(&m.awaitCount, 1)
+	m.awaitCount.Add(1)
 	current := m.current
 	//调度另一个goroutine去执行m的任务队列
 	m.sche()
@@ -400,7 +447,7 @@ func (mtx *Mutex) Lock() {
 			panic("Lock error")
 		}
 		mtx.waitlist.PushBack(current)
-		atomic.AddInt32(&mtx.m.awaitCount, 1)
+		mtx.m.awaitCount.Add(1)
 		mtx.m.sche()
 		//等待唤醒
 		current.yield()

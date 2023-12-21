@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -292,6 +293,45 @@ func TestAwait(t *testing.T) {
 
 	box.Close(true)
 	fmt.Println("box closed")
+}
+
+func TestSuspend(t *testing.T) {
+	s := NewMailbox(MailboxOption{
+		UrgentQueueCap: 2,
+		NormalQueueCap: 8,
+		AwaitQueueCap:  64,
+	})
+
+	s.Start()
+
+	s.Suspend()
+
+	//suspend之后普通消息不会执行
+	for i := 0; i < 9; i++ {
+		v := i
+		err := s.InputNoWait(func() {
+			fmt.Println("msg", v)
+		})
+		if err != nil {
+			fmt.Println(err, i)
+		}
+	}
+
+	var wait sync.WaitGroup
+	//urgent消息不受影响
+	for i := 0; i < 10; i++ {
+		wait.Add(1)
+		v := i
+		s.InputUrgent(func() {
+			fmt.Println("urgent", v)
+			wait.Done()
+		})
+	}
+
+	//resume后，普通消息得以执行
+	s.Resume()
+
+	s.Close(true)
 }
 
 func TestNornal(t *testing.T) {

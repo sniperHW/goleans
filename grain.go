@@ -158,7 +158,7 @@ func (grain *Grain) tick() {
 	case grain_un_activate, grain_activated, grain_running:
 		now := time.Now()
 		lastRequest := grain.lastRequest.Load().(time.Time)
-		if grain.mailbox.awaitCount == 0 && now.Sub(lastRequest) > grain.deactiveTime {
+		if grain.mailbox.awaitCount.Load() == 0 && now.Sub(lastRequest) > grain.deactiveTime {
 			if grain.userObject == nil {
 				grain.deactive(nil)
 			} else if err := grain.userObject.Deactivate(); err != nil {
@@ -192,7 +192,7 @@ func (grain *Grain) onSiloStop(fn func()) {
 		grain.deactive(fn)
 	case grain_running:
 		//只有当邮箱已经排空并且没有await调用才可以取消激活
-		if grain.mailbox.Empty() && atomic.LoadInt32(&grain.mailbox.awaitCount) == 0 {
+		if grain.mailbox.Empty() && grain.mailbox.awaitCount.Load() == 0 {
 			var err error
 			for i := 0; i < 3; i++ {
 				if err = grain.userObject.Deactivate(); err != nil {
