@@ -403,41 +403,41 @@ func TestUrgent(t *testing.T) {
 	s.Close(true)
 }
 
-func TestLock(t *testing.T) {
+func TestBarrier(t *testing.T) {
 	s := NewMailbox(MailboxOption{
 		UrgentQueueCap: 64,
 		NormalQueueCap: 64,
 		AwaitQueueCap:  64,
 	})
 
-	mtx := &Mutex{
+	mtx := &Barrier{
 		m:        s,
 		waitlist: list.New(),
 	}
 
 	s.Input(func() {
 		for i := 0; i < 10; i++ {
-			mtx.Lock()
+			mtx.Acquire()
 			fmt.Println("a")
-			mtx.Unlock()
+			mtx.Release()
 			s.Await(time.Sleep, time.Millisecond*100)
 		}
 	})
 
 	s.Input(func() {
 		for i := 0; i < 10; i++ {
-			mtx.Lock()
+			mtx.Acquire()
 			fmt.Println("b")
-			mtx.Unlock()
+			mtx.Release()
 			s.Await(time.Sleep, time.Millisecond*100)
 		}
 	})
 
 	s.Input(func() {
 		for i := 0; i < 10; i++ {
-			mtx.Lock()
+			mtx.Acquire()
 			fmt.Println("c")
-			mtx.Unlock()
+			mtx.Release()
 			s.Await(time.Sleep, time.Millisecond*100)
 		}
 	})

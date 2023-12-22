@@ -14,13 +14,14 @@ package {{.Name}}
 
 import (
 	"context"
+	"github.com/sniperHW/goleans/grain"
+	"github.com/sniperHW/goleans/rpc"
 	"github.com/sniperHW/goleans"
-	"github.com/sniperHW/goleans/pd"
 	"time"
 )
 
 type Replyer struct {
-	replyer *goleans.Replyer
+	replyer rpc.Replyer
 }
 
 func (r *Replyer) Reply(result *{{.Response}}) {
@@ -31,20 +32,20 @@ type {{.Service}} interface {
 	Serve{{.Service}}(context.Context, *Replyer,*{{.Request}})
 }
 
-func Register(grain *goleans.Grain,o {{.Service}}) error {
-	return grain.RegisterMethod({{.Method}}, func(ctx context.Context, r *goleans.Replyer, arg *{{.Request}}){
+func Register(ctx grain.Context,o {{.Service}}) error {
+	return ctx.RegisterMethod({{.Method}}, func(ctx context.Context, r rpc.Replyer, arg *{{.Request}}){
 		o.Serve{{.Service}}(ctx,&Replyer{replyer:r},arg)
 	})	
 }
 
 
-func Call(ctx context.Context,pid pd.Pid,arg *{{.Request}}) (*{{.Response}},error) {
+func Call(ctx context.Context,pid string,arg *{{.Request}}) (*{{.Response}},error) {
 	var resp {{.Response}}
 	err := goleans.Call(ctx,pid,{{.Method}},arg,&resp)
 	return &resp,err
 }
 
-func CallWithTimeout(pid pd.Pid,arg *{{.Request}},d time.Duration) (*{{.Response}},error) {
+func CallWithTimeout(pid string,arg *{{.Request}},d time.Duration) (*{{.Response}},error) {
 	var resp {{.Response}}
 	err := goleans.CallWithTimeout(pid,{{.Method}},arg,&resp,d)
 	return &resp,err

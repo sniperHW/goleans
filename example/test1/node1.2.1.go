@@ -10,7 +10,6 @@ import (
 
 	"github.com/sniperHW/goleans"
 	"github.com/sniperHW/goleans/example/placement"
-	"github.com/sniperHW/goleans/pd"
 
 	"github.com/sniperHW/goleans/example/grain/rpc/service/echo"
 	"github.com/sniperHW/goleans/example/grain/rpc/service/test"
@@ -43,7 +42,7 @@ func main() {
 			wait.Add(2)
 			begin := time.Now()
 			go func() {
-				resp, err := echo.CallWithTimeout(pd.Pid("sniperHW1@User"), &echo.EchoReq{
+				resp, err := echo.CallWithTimeout("sniperHW1@User", &echo.EchoReq{
 					Msg: "hello sniperHW1",
 				}, time.Second*5)
 				if err == nil {
@@ -55,7 +54,7 @@ func main() {
 			}()
 
 			go func() {
-				resp, err := echo.CallWithTimeout(pd.Pid("sniperHW1@User"), &echo.EchoReq{
+				resp, err := echo.CallWithTimeout("sniperHW1@User", &echo.EchoReq{
 					Msg: "hello sniperHW1",
 				}, time.Second*5)
 				if err == nil {
@@ -79,7 +78,7 @@ func main() {
 
 			begin := time.Now()
 			go func() {
-				resp, err := test.CallWithTimeout(pd.Pid("sniperHW2@Boss"), &test.TestReq{
+				resp, err := test.CallWithTimeout("sniperHW2@Boss", &test.TestReq{
 					Msg: "hello sniperHW2",
 				}, time.Second*5)
 				if err == nil {
@@ -91,7 +90,7 @@ func main() {
 			}()
 
 			go func() {
-				resp, err := test.CallWithTimeout(pd.Pid("sniperHW2@Boss"), &test.TestReq{
+				resp, err := test.CallWithTimeout("sniperHW2@Boss", &test.TestReq{
 					Msg: "hello sniperHW2",
 				}, time.Second*5)
 				if err == nil {

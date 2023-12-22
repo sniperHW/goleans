@@ -12,6 +12,7 @@ import (
 	"github.com/sniperHW/goleans/example/grain/rpc/service/login"
 	"github.com/sniperHW/goleans/example/grain/rpc/service/logout"
 	"github.com/sniperHW/goleans/example/grain/rpc/service/relaymsg"
+	"github.com/sniperHW/goleans/grain"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
@@ -24,7 +25,7 @@ type gateUser struct {
 }
 
 type User struct {
-	grain    *goleans.Grain
+	ctx      grain.Context
 	name     string
 	Node     *clustergo.Node
 	codecc   *codec.CSCodec
@@ -42,7 +43,7 @@ func (u *User) SendToUser(msg *codec.Message) {
 func (u *User) ServeEcho(ctx context.Context, replyer *echo.Replyer, arg *echo.EchoReq) {
 	time.Sleep(time.Second * 2) //阻塞当前grain
 	replyer.Reply(&echo.EchoRsp{
-		Msg: fmt.Sprintf("echo response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grain.Pid(), arg.Msg),
+		Msg: fmt.Sprintf("echo response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grainCtx.Pid(), arg.Msg),
 	})
 }
 
@@ -64,7 +65,7 @@ func (u *User) ServeLogout(ctx context.Context, replyer *logout.Replyer, arg *lo
 	resp := &logout.LogoutRsp{}
 	if u.gateUser != nil && u.gateUser.gateAddr == addr.LogicAddr(arg.GateAddr) && u.gateUser.gateUserID == uint64(arg.GateUserID) {
 		u.gateUser = nil
-		goleans.GetLogger().Debugf("%s logout", u.grain.Pid())
+		goleans.Log().Debugf("%s logout", u.ctx.Pid())
 	}
 	replyer.Reply(resp)
 }
@@ -83,16 +84,16 @@ func (u *User) ServeLogin(ctx context.Context, replyer *login.Replyer, arg *logi
 	replyer.Reply(resp)
 }
 
-func (u *User) Init(grain *goleans.Grain) error {
+func (u *User) Activate(ctx grain.Context) (error, bool) {
 	//从数据库加载数据，初始化User
 	u.codecc = codec.NewCodec()
-	u.grain = grain
+	u.ctx = ctx
 	//注册rpc方法
-	echo.Register(grain, u)
-	login.Register(grain, u)
-	relaymsg.Register(grain, u)
-	logout.Register(grain, u)
-	return nil
+	echo.Register(ctx, u)
+	login.Register(ctx, u)
+	relaymsg.Register(ctx, u)
+	logout.Register(ctx, u)
+	return nil, false
 }
 
 func (u *User) Deactivate() error {

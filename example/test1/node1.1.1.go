@@ -33,7 +33,7 @@ var grainList []goleans.GrainCfg = []goleans.GrainCfg{
 }
 
 // 工厂函数，用于创建用户定义的Grain对象
-func UserGrainFactory(grainType string) goleans.UserObject {
+func grainFactory(grainType string) goleans.Grain {
 	switch grainType {
 	case "User":
 		return &grain.User{
@@ -61,7 +61,7 @@ func main() {
 	localaddr, _ := addr.MakeLogicAddr("1.1.1")
 	discoveryCli := membership.NewClient(*discoveryAddr)
 	pdClient := placement.NewCli(localaddr, *pdAddr)
-	goleans.StartSilo(discoveryCli, localaddr, pdClient, grainList, UserGrainFactory)
+	goleans.StartSilo(discoveryCli, localaddr, pdClient, grainList, grainFactory)
 	c := make(chan os.Signal)
 	signal.Notify(c, syscall.SIGINT) //监听指定信号
 	_ = <-c

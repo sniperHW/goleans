@@ -432,39 +432,39 @@ func (m *Mailbox) Close(wait bool) {
 	}
 }
 
-type Mutex struct {
+type Barrier struct {
 	m        *Mailbox
 	owner    *goroutine
 	waitlist *list.List
 }
 
-func (mtx *Mutex) Lock() {
-	current := mtx.m.current
-	if mtx.owner == nil {
-		mtx.owner = current
+func (be *Barrier) Acquire() {
+	current := be.m.current
+	if be.owner == nil {
+		be.owner = current
 	} else {
-		if mtx.owner == current {
-			panic("Lock error")
+		if be.owner == current {
+			panic("Acquire error")
 		}
-		mtx.waitlist.PushBack(current)
-		mtx.m.awaitCount.Add(1)
-		mtx.m.sche()
+		be.waitlist.PushBack(current)
+		be.m.awaitCount.Add(1)
+		be.m.sche()
 		//等待唤醒
 		current.yield()
 		//1
 	}
 }
 
-func (mtx *Mutex) Unlock() {
-	if mtx.owner != mtx.m.current {
-		panic("Unlock error")
+func (be *Barrier) Release() {
+	if be.owner != be.m.current {
+		panic("Release error")
 	} else {
-		mtx.owner = nil
-		front := mtx.waitlist.Front()
+		be.owner = nil
+		front := be.waitlist.Front()
 		if front != nil {
-			co := mtx.waitlist.Remove(front).(*goroutine)
-			mtx.owner = co
-			mtx.m.putAwait(co)
+			co := be.waitlist.Remove(front).(*goroutine)
+			be.owner = co
+			be.m.putAwait(co)
 		}
 	}
 }

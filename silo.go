@@ -7,21 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sniperHW/goleans/pd"
-
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
+	"github.com/sniperHW/goleans/pd"
+	"github.com/sniperHW/goleans/rpc"
 )
-
-var logger Logger
-
-func InitLogger(l Logger) {
-	logger = l
-}
-
-func GetLogger() Logger {
-	return logger
-}
 
 type GrainCfg struct {
 	Type          string
@@ -31,26 +21,26 @@ type GrainCfg struct {
 }
 
 var (
-	UserGrainFactory func(string) UserObject
+	GrainFactory func(string) Grain
 )
 
 type Silo struct {
 	sync.RWMutex
-	grains            map[pd.Pid]*Grain
-	grainList         map[string]GrainCfg
-	node              *clustergo.Node
-	placementDriver   pd.PlacementDriver
-	userObjectFactory func(string) UserObject
-	stoped            atomic.Bool
+	grains          map[string]*GrainContext
+	grainList       map[string]GrainCfg
+	node            *clustergo.Node
+	placementDriver pd.PlacementDriver
+	grainFactory    func(string) Grain
+	stoped          atomic.Bool
 }
 
-func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, grainList []GrainCfg, userObjectFactory func(string) UserObject) (*Silo, error) {
+func newSilo(ctx context.Context, placementDriver pd.PlacementDriver, node *clustergo.Node, grainList []GrainCfg, grainFactory func(string) Grain) (*Silo, error) {
 	s := &Silo{
-		grains:            map[pd.Pid]*Grain{},
-		node:              node,
-		placementDriver:   placementDriver,
-		userObjectFactory: userObjectFactory,
-		grainList:         map[string]GrainCfg{},
+		grains:          map[string]*GrainContext{},
+		node:            node,
+		placementDriver: placementDriver,
+		grainFactory:    grainFactory,
+		grainList:       map[string]GrainCfg{},
 	}
 
 	placementDriver.SetGetMetric(s.getMetric)
@@ -77,10 +67,10 @@ func (s *Silo) getMetric() pd.Metric {
 	}
 }
 
-func (s *Silo) removeGrain(grain *Grain) {
+func (s *Silo) removeGrain(grainCtx *GrainContext) {
 	s.Lock()
 	defer s.Unlock()
-	delete(s.grains, grain.pid)
+	delete(s.grains, grainCtx.pid)
 }
 
 func (s *Silo) Stop() {
@@ -103,7 +93,7 @@ func (s *Silo) Stop() {
 	}
 }
 
-func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *RequestMsg) {
+func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *rpc.RequestMsg) {
 
 	logger.Debugf("OnRPCRequest from:%s method:%d seq:%d", from.String(), req.Method, req.Seq)
 
@@ -118,90 +108,91 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *Reque
 		return
 	}
 
-	identity := pd.Pid(req.To)
+	identity := req.To
 
 	t := strings.Split(string(identity), "@")
 
 	if len(t) < 2 {
-		replyer.error(ErrCodeInvaildIdentity)
+		replyer.error(rpc.ErrCodeInvaildPid)
 		return
 	}
 
 	grainType := t[1]
 
 	s.Lock()
-	grain, ok := s.grains[identity]
+	grainCtx, ok := s.grains[identity]
 	if !ok {
-		grain = newGrain(s, identity, grainType)
-		s.grains[identity] = grain
+		grainCtx = newGrainContext(s, identity, grainType)
+		s.grains[identity] = grainCtx
 	}
 	s.Unlock()
-	grain.lastRequest.Store(time.Now())
-	err := grain.mailbox.InputNoWait(func() {
-		if grain.stoped {
+	grainCtx.lastRequest.Store(time.Now())
+	err := grainCtx.mailbox.InputNoWait(func() {
+		if grainCtx.stoped {
 			//silo正在停止
 			replyer.redirect(0)
 			return
 		}
 
-		if grain.state == grain_un_activate {
+		if grainCtx.state == grain_un_activate {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1000)
 			err := s.placementDriver.Activate(ctx, identity)
 			cancel()
 			switch err := err.(type) {
 			case pd.ErrorRedirect:
-				logger.Errorf("Activate Grain:%s redirect to:%s", grain.Pid(), err.Addr.String())
+				logger.Errorf("Activate Grain:%s redirect to:%s", grainCtx.Pid(), err.Addr.String())
 				replyer.redirect(err.Addr)
-				s.removeGrain(grain)
-				grain.mailbox.Close(false)
+				s.removeGrain(grainCtx)
+				grainCtx.mailbox.Close(false)
 				return
 			case error:
-				logger.Errorf("Activate Grain:%s error:%v", grain.Pid(), err)
-				replyer.error(ErrCodeRetryAgain)
-				s.removeGrain(grain)
-				grain.mailbox.Close(false)
+				logger.Errorf("Activate Grain:%s error:%v", grainCtx.Pid(), err)
+				replyer.error(rpc.ErrCodeRetryAgain)
+				s.removeGrain(grainCtx)
+				grainCtx.mailbox.Close(false)
 				return
 			default:
-				grain.state = grain_activated
+				grainCtx.state = grain_activated
 			}
 		}
 
-		if grain.state == grain_activated {
-			if grain.userObject == nil {
-				if userObj := s.userObjectFactory(grainType); nil == userObj {
-					logger.Errorf("Create Grain:%s Failed", grain.Pid())
-					grain.deactive(nil)
+		if grainCtx.state == grain_activated {
+			if grainCtx.grain == nil {
+				if grain := s.grainFactory(grainType); nil == grain {
+					logger.Errorf("Create Grain:%s Failed", grainCtx.Pid())
+					grainCtx.deactive(nil)
 					replyer.redirect(addr.LogicAddr(0))
 					return
 				} else {
-					grain.userObject = userObj
+					grainCtx.grain = grain
 				}
 			}
-
-			if err := grain.userObject.Init(grain); err != nil {
-				logger.Errorf("Create Grain:%s Init error:%e", grain.Pid(), err)
-				if err == ErrInitUnRetryAbleError {
-					//通告调用方，调用不应再尝试
-					replyer.error(ErrCodeUserGrainInitError)
+			err, retry := grainCtx.grain.Activate(grainCtx)
+			if err != nil {
+				logger.Errorf("Create Grain:%s Init error:%e", grainCtx.Pid(), err)
+				if retry {
+					replyer.error(rpc.ErrCodeRetryAgain)
 				} else {
-					replyer.error(ErrCodeRetryAgain)
+					grainCtx.deactive(nil)
+					//通告调用方，调用不应再尝试
+					replyer.error(rpc.ErrCodeActivateFailed)
 				}
 				return
 			} else {
-				grain.state = grain_running
+				grainCtx.state = grain_running
 			}
 		}
 
-		if grain.state == grain_running {
-			grain.serveCall(ctx, replyer, req)
+		if grainCtx.state == grain_running {
+			grainCtx.serveCall(ctx, replyer, req)
 		} else {
 			replyer.redirect(addr.LogicAddr(0))
 		}
 	})
 
-	if err == ErrMailBoxClosed {
+	if err == rpc.ErrMailBoxClosed {
 		replyer.redirect(addr.LogicAddr(0))
-	} else if err == ErrMailBoxFull {
-		replyer.error(ErrCodeRetryAgain)
+	} else if err == rpc.ErrMailBoxFull {
+		replyer.error(rpc.ErrCodeRetryAgain)
 	}
 }

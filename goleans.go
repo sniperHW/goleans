@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sniperHW/goleans/pd"
+	"github.com/sniperHW/goleans/rpc"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
@@ -18,7 +19,7 @@ import (
 
 var (
 	silo      *Silo
-	rpcClient *RPCClient
+	rpcClient *rpc.Client
 	startOnce sync.Once
 	started   atomic.Bool
 )
@@ -35,9 +36,9 @@ func Start(memberShip membership.Client, localAddr addr.LogicAddr, placementDriv
 			return err
 		}
 		node := clustergo.GetDefaultNode()
-		rpcClient = NewRPCClient(node, placementDriver)
-		node.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
-			resp := ResponseMsg{}
+		rpcClient = rpc.NewClient(node, placementDriver)
+		node.RegisterBinaryHandler(rpc.Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+			resp := rpc.ResponseMsg{}
 			if err := resp.Decode(msg); err != nil {
 				logger.Error(err)
 			} else {
@@ -51,7 +52,7 @@ func Start(memberShip membership.Client, localAddr addr.LogicAddr, placementDriv
 }
 
 // 作为Silo启动
-func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []GrainCfg, siloObjectFactory func(string) UserObject) error {
+func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []GrainCfg, grainFactory func(string) Grain) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
@@ -64,35 +65,35 @@ func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placement
 
 		node := clustergo.GetDefaultNode()
 
-		if siloObjectFactory != nil {
+		if grainFactory != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
 
-			s, err := newSilo(ctx, placementDriver, node, grainList, siloObjectFactory)
+			s, err := newSilo(ctx, placementDriver, node, grainList, grainFactory)
 			if err != nil {
 				clustergo.Stop()
 				return err
 			}
 			silo = s
 
-			node.RegisterBinaryHandler(Actor_request, func(ctx context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
-				req := RequestMsg{}
+			node.RegisterBinaryHandler(rpc.Actor_request, func(ctx context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+				req := rpc.RequestMsg{}
 				if err := req.Decode(msg); err != nil {
 					logger.Error(err)
 				} else {
 					silo.OnRPCRequest(ctx, from, &req)
 				}
-			}).RegisterBinaryHandler(Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+			}).RegisterBinaryHandler(rpc.Actor_notify_redirect, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
 				if len(msg) > 4 {
 					newAddr := addr.LogicAddr(binary.BigEndian.Uint32(msg[:4]))
-					placementDriver.ResetPlacementCache(pd.Pid(msg[4:]), newAddr)
+					placementDriver.ResetPlacementCache(string(msg[4:]), newAddr)
 				}
 			})
 		}
 
-		rpcClient = NewRPCClient(node, placementDriver)
-		node.RegisterBinaryHandler(Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
-			resp := ResponseMsg{}
+		rpcClient = rpc.NewClient(node, placementDriver)
+		node.RegisterBinaryHandler(rpc.Actor_response, func(_ context.Context, from addr.LogicAddr, cmd uint16, msg []byte) {
+			resp := rpc.ResponseMsg{}
 			if err := resp.Decode(msg); err != nil {
 				logger.Error(err)
 			} else {
@@ -105,14 +106,14 @@ func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placement
 	return nil
 }
 
-func Call(ctx context.Context, pid pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
+func Call(ctx context.Context, pid string, method uint16, arg proto.Message, ret proto.Message) error {
 	if !started.Load() {
 		return errors.New("not started")
 	}
 	return rpcClient.Call(ctx, pid, method, arg, ret)
 }
 
-func CallWithTimeout(pid pd.Pid, method uint16, arg proto.Message, ret proto.Message, d time.Duration) error {
+func CallWithTimeout(pid string, method uint16, arg proto.Message, ret proto.Message, d time.Duration) error {
 	if !started.Load() {
 		return errors.New("not started")
 	}

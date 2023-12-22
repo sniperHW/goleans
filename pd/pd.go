@@ -14,8 +14,6 @@ type Metric struct {
 	CPU        float32
 }
 
-type Pid string //identity of grain
-
 type ErrorRedirect struct {
 	Addr addr.LogicAddr
 }
@@ -41,15 +39,15 @@ type PlacementDriver interface {
 	//要求pd将Silo标记为不可分配
 	MarkUnAvaliable()
 
-	GetPlacement(context.Context, Pid) (addr.LogicAddr, error)
+	GetPlacement(context.Context, string) (addr.LogicAddr, error)
 
-	ResetPlacementCache(Pid, addr.LogicAddr)
+	ResetPlacementCache(string, addr.LogicAddr)
 
-	Deactivate(context.Context, Pid) error
+	Deactivate(context.Context, string) error
 
 	/*
 	 *  尝试请求pd将Pid的地址锁定为请求Silo的地址
 	 *  如果Pid已经被其它Silo锁定，将返回ErrorRedirect,Addr字段含有重定向地址
 	 */
-	Activate(context.Context, Pid) error
+	Activate(context.Context, string) error
 }

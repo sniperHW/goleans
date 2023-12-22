@@ -14,3 +14,13 @@ type Logger interface {
 	Panic(...interface{})
 	Fatal(...interface{})
 }
+
+var logger Logger
+
+func InitLogger(l Logger) {
+	logger = l
+}
+
+func Log() Logger {
+	return logger
+}

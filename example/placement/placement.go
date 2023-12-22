@@ -74,8 +74,8 @@ type HeartbeatResp struct {
 }
 
 type ActivateReq struct {
-	Addr     addr.LogicAddr
-	Identity pd.Pid
+	Addr addr.LogicAddr
+	Pid  string
 }
 
 type ActivateResp struct {
@@ -83,15 +83,15 @@ type ActivateResp struct {
 }
 
 type DeactivateReq struct {
-	Addr     addr.LogicAddr
-	Identity pd.Pid
+	Addr addr.LogicAddr
+	Pid  string
 }
 
 type DeactivateResp struct {
 }
 
 type GetPlacementReq struct {
-	Identity pd.Pid
+	Pid string
 }
 
 type GetPlacementResp struct {
@@ -277,15 +277,15 @@ type silo struct {
 }
 
 type tmpPlacement struct {
-	identity pd.Pid
-	addr     addr.LogicAddr
-	timer    *time.Timer
+	pid   string
+	addr  addr.LogicAddr
+	timer *time.Timer
 }
 
 type placementSvr struct {
 	sync.Mutex
-	Placement     map[pd.Pid]addr.LogicAddr
-	tempPlacement map[pd.Pid]*tmpPlacement
+	Placement     map[string]addr.LogicAddr
+	tempPlacement map[string]*tmpPlacement
 	Silos         map[addr.LogicAddr]*silo
 	storage       *os.File
 	siloArray     map[string][]*silo //可供分配的silo
@@ -318,8 +318,8 @@ func NewServer(storage string) (*placementSvr, error) {
 	}
 
 	svr := &placementSvr{
-		Placement:     map[pd.Pid]addr.LogicAddr{},
-		tempPlacement: map[pd.Pid]*tmpPlacement{},
+		Placement:     map[string]addr.LogicAddr{},
+		tempPlacement: map[string]*tmpPlacement{},
 		Silos:         map[addr.LogicAddr]*silo{},
 		siloArray:     map[string][]*silo{},
 	}
@@ -405,19 +405,19 @@ func (s *placementSvr) Activate(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
 	req := msg.PayLoad.(*ActivateReq)
-	if place, ok := s.Placement[req.Identity]; ok && s.getSiloByaddr(place) != nil {
+	if place, ok := s.Placement[req.Pid]; ok && s.getSiloByaddr(place) != nil {
 		if place != req.Addr {
 			sess.Send(&Message{Seq: msg.Seq, PayLoad: &ActivateResp{Addr: place}})
 			return
 		}
 	}
 
-	s.Placement[req.Identity] = req.Addr
+	s.Placement[req.Pid] = req.Addr
 
-	if tmp := s.tempPlacement[req.Identity]; tmp != nil {
+	if tmp := s.tempPlacement[req.Pid]; tmp != nil {
 		logger.Sugar().Debug("delete tempPlacement")
 		tmp.timer.Stop()
-		delete(s.tempPlacement, req.Identity)
+		delete(s.tempPlacement, req.Pid)
 	}
 	s.save()
 	sess.Send(&Message{Seq: msg.Seq, PayLoad: &ActivateResp{Addr: req.Addr}})
@@ -427,12 +427,12 @@ func (s *placementSvr) Deactivate(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
 	req := msg.PayLoad.(*DeactivateReq)
-	if place, ok := s.Placement[req.Identity]; ok {
+	if place, ok := s.Placement[req.Pid]; ok {
 		if place == req.Addr {
-			delete(s.Placement, req.Identity)
-			if tmp := s.tempPlacement[req.Identity]; tmp != nil {
+			delete(s.Placement, req.Pid)
+			if tmp := s.tempPlacement[req.Pid]; tmp != nil {
 				tmp.timer.Stop()
-				delete(s.tempPlacement, req.Identity)
+				delete(s.tempPlacement, req.Pid)
 			}
 			s.save()
 		}
@@ -444,27 +444,27 @@ func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
 	req := msg.PayLoad.(*GetPlacementReq)
-	if place, ok := s.Placement[req.Identity]; ok {
+	if place, ok := s.Placement[req.Pid]; ok {
 		if s.getSiloByaddr(place) != nil {
 			sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: place}})
 			return
 		} else {
 			//原来的silo已经被移除
-			delete(s.Placement, req.Identity)
+			delete(s.Placement, req.Pid)
 		}
 	}
 
-	if place, ok := s.tempPlacement[req.Identity]; ok {
+	if place, ok := s.tempPlacement[req.Pid]; ok {
 		if s.getSiloByaddr(place.addr) != nil {
 			sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: place.addr}})
 			return
 		} else {
 			//原来的silo已经被移除
-			delete(s.tempPlacement, req.Identity)
+			delete(s.tempPlacement, req.Pid)
 		}
 	}
 
-	t := strings.Split(string(req.Identity), "@")
+	t := strings.Split(string(req.Pid), "@")
 
 	if len(t) < 2 {
 		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{ErrCode: ErrInvaildIdentity}})
@@ -476,17 +476,17 @@ func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
 	if len(siloArray) > 0 {
 		silo := siloArray[int(rand.Int31())%len(siloArray)]
 		tmp := &tmpPlacement{
-			identity: req.Identity,
-			addr:     silo.Addr,
+			pid:  req.Pid,
+			addr: silo.Addr,
 		}
 		tmp.timer = time.AfterFunc(time.Second*5, func() {
 			s.Lock()
 			defer s.Unlock()
-			if s.tempPlacement[req.Identity] == tmp {
-				delete(s.tempPlacement, req.Identity)
+			if s.tempPlacement[req.Pid] == tmp {
+				delete(s.tempPlacement, req.Pid)
 			}
 		})
-		s.tempPlacement[req.Identity] = tmp
+		s.tempPlacement[req.Pid] = tmp
 		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{Addr: silo.Addr}})
 	} else {
 		sess.Send(&Message{Seq: msg.Seq, PayLoad: &GetPlacementResp{ErrCode: ErrNoAvaliableSilo}})
@@ -556,7 +556,7 @@ type placementCache struct {
 type placementCli struct {
 	sync.Mutex
 	callMtx    sync.Mutex
-	localCache map[pd.Pid]placementCache
+	localCache map[string]placementCache
 	selfAddr   addr.LogicAddr
 	getMetric  func() pd.Metric
 	cacheTime  time.Duration
@@ -569,7 +569,7 @@ type placementCli struct {
 
 func NewCli(selfAddr addr.LogicAddr, server string) *placementCli {
 	cli := &placementCli{
-		localCache: map[pd.Pid]placementCache{},
+		localCache: map[string]placementCache{},
 		selfAddr:   selfAddr,
 		server:     server,
 		closed:     make(chan struct{}),
@@ -720,24 +720,24 @@ func (cli *placementCli) MarkUnAvaliable() {
 	return
 }
 
-func (cli *placementCli) ResetPlacementCache(identity pd.Pid, newAddr addr.LogicAddr) {
+func (cli *placementCli) ResetPlacementCache(pid string, newAddr addr.LogicAddr) {
 	cli.Lock()
 	defer cli.Unlock()
 	if newAddr.Empty() {
-		delete(cli.localCache, identity)
+		delete(cli.localCache, pid)
 	} else {
-		cli.localCache[identity] = placementCache{
+		cli.localCache[pid] = placementCache{
 			addr:          newAddr,
 			cacheDeadline: time.Now().Add(cli.cacheTime),
 		}
 	}
 }
 
-func (cli *placementCli) Activate(ctx context.Context, identity pd.Pid) error {
+func (cli *placementCli) Activate(ctx context.Context, pid string) error {
 	req := &Message{
 		PayLoad: &ActivateReq{
-			Identity: identity,
-			Addr:     cli.selfAddr,
+			Pid:  pid,
+			Addr: cli.selfAddr,
 		},
 	}
 
@@ -749,7 +749,7 @@ func (cli *placementCli) Activate(ctx context.Context, identity pd.Pid) error {
 	if resp.PayLoad.(*ActivateResp).Addr == cli.selfAddr {
 		cli.Lock()
 		defer cli.Unlock()
-		cli.localCache[identity] = placementCache{
+		cli.localCache[pid] = placementCache{
 			addr: resp.PayLoad.(*ActivateResp).Addr,
 		}
 		return nil
@@ -758,11 +758,11 @@ func (cli *placementCli) Activate(ctx context.Context, identity pd.Pid) error {
 	}
 }
 
-func (cli *placementCli) Deactivate(ctx context.Context, identity pd.Pid) error {
+func (cli *placementCli) Deactivate(ctx context.Context, pid string) error {
 	req := &Message{
 		PayLoad: &DeactivateReq{
-			Identity: identity,
-			Addr:     cli.selfAddr,
+			Pid:  pid,
+			Addr: cli.selfAddr,
 		},
 	}
 
@@ -772,22 +772,22 @@ func (cli *placementCli) Deactivate(ctx context.Context, identity pd.Pid) error 
 	}
 	cli.Lock()
 	defer cli.Unlock()
-	delete(cli.localCache, identity)
+	delete(cli.localCache, pid)
 
 	return nil
 }
 
-func (cli *placementCli) GetPlacement(ctx context.Context, identity pd.Pid) (addr.LogicAddr, error) {
+func (cli *placementCli) GetPlacement(ctx context.Context, pid string) (addr.LogicAddr, error) {
 	cli.Lock()
 	defer cli.Unlock()
-	cache, ok := cli.localCache[identity]
+	cache, ok := cli.localCache[pid]
 	if ok && time.Now().Before(cache.cacheDeadline) {
 		return cache.addr, nil
 	}
 
 	req := &Message{
 		PayLoad: &GetPlacementReq{
-			Identity: identity,
+			Pid: pid,
 		},
 	}
 

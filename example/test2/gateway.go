@@ -16,7 +16,6 @@ import (
 	"github.com/sniperHW/goleans"
 	"github.com/sniperHW/goleans/example/codec"
 	"github.com/sniperHW/goleans/example/placement"
-	"github.com/sniperHW/goleans/pd"
 
 	"github.com/sniperHW/goleans/example/grain/rpc/service/login"
 	"github.com/sniperHW/goleans/example/grain/rpc/service/logout"
@@ -30,9 +29,9 @@ import (
 )
 
 type gateUser struct {
-	id       uint64
-	identity pd.Pid
-	conn     netgo.Socket
+	id   uint64
+	pid  string
+	conn netgo.Socket
 }
 
 var (
@@ -78,12 +77,12 @@ func main() {
 			}
 
 			u := &gateUser{
-				id:       atomic.AddUint64(&nextID, 1),
-				identity: pd.Pid(fmt.Sprintf("%s@User", string(account))),
+				id:  atomic.AddUint64(&nextID, 1),
+				pid: fmt.Sprintf("%s@User", string(account)),
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-			resp, err := login.Call(ctx, u.identity, &login.LoginReq{
+			resp, err := login.Call(ctx, u.pid, &login.LoginReq{
 				GateUserID: int64(u.id),
 				GateAddr:   int32(clustergo.GetDefaultNode().Addr().LogicAddr()),
 			})
@@ -103,7 +102,7 @@ func main() {
 			defer func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 				defer cancel()
-				logout.Call(ctx, u.identity, &logout.LogoutReq{
+				logout.Call(ctx, u.pid, &logout.LogoutReq{
 					GateUserID: int64(u.id),
 					GateAddr:   int32(clustergo.GetDefaultNode().Addr().LogicAddr()),
 				})
@@ -127,7 +126,7 @@ func main() {
 
 				//将消息转发给user处理
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-				resp, err := relaymsg.Call(ctx, u.identity, &relaymsg.RelaymsgReq{
+				resp, err := relaymsg.Call(ctx, u.pid, &relaymsg.RelaymsgReq{
 					GateUserID: int64(u.id),
 					GateAddr:   int32(clustergo.GetDefaultNode().Addr().LogicAddr()),
 					Msg:        msg})

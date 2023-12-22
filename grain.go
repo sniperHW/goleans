@@ -3,13 +3,17 @@ package goleans
 import (
 	"container/list"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"reflect"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
 
-	"github.com/sniperHW/goleans/pd"
+	"github.com/sniperHW/clustergo"
+	"github.com/sniperHW/clustergo/addr"
+	"github.com/sniperHW/goleans/grain"
+	"github.com/sniperHW/goleans/rpc"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -20,14 +24,8 @@ var (
 	DefaultDeactiveTime = time.Minute * 5 //Grain空闲超过这个时间后执行Deactive
 )
 
-/*
- *  对不可重试的错误，Init必须返回ErrInitUnRetryAbleError。
- *  例如Account对象，它代表玩家的账号，玩家首先要创建账号之后才能接收请求，对于一个不存在的Account对象，当它
- *  接收到请求被创建出来，执行Init。此时需要从数据库读取用户数据执行初始化，因为Account没有创建过，所以在数据库中不存在相关记录
- *  此时应该返回ErrInitUnRetryAbleError通知框架层执行正确的逻辑（某些对象的行为可能是不存在数据库记录就插入一条记录）
- */
-type UserObject interface {
-	Init(*Grain) error
+type Grain interface {
+	Activate(grain.Context) (error, bool) //成功返回nil,否则返回错误以及是否可以重试
 	Deactivate() error
 }
 
@@ -39,30 +37,104 @@ const (
 	grain_destroy      = 4
 )
 
-type Grain struct {
+type Replyer struct {
+	req     *rpc.RequestMsg
+	replyed int32
+	from    addr.LogicAddr
+	node    *clustergo.Node
+	hook    func(*rpc.RequestMsg)
+}
+
+func (r *Replyer) SetReplyHook(hook func(_ *rpc.RequestMsg)) {
+	r.hook = hook
+}
+
+func (r *Replyer) redirect(redirectAddr addr.LogicAddr) {
+	if r.req.Oneway {
+		//通告对端identity不在当前节点
+		buff := make([]byte, rpc.LenAddr, len(r.req.To)+rpc.LenAddr)
+		binary.BigEndian.PutUint32(buff, uint32(redirectAddr))
+		buff = append(buff, []byte(r.req.To)...)
+		r.node.SendBinMessage(r.from, rpc.Actor_notify_redirect, buff)
+	} else if atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+		resp := &rpc.ResponseMsg{
+			Seq:          r.req.Seq,
+			ErrCode:      rpc.ErrCodeRedirect,
+			RedirectAddr: int(redirectAddr),
+		}
+		if err := r.node.SendBinMessage(r.from, rpc.Actor_response, resp.Encode()); err != nil {
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+		}
+	}
+}
+
+func (r *Replyer) error(errCode int) {
+	if !r.req.Oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+		resp := &rpc.ResponseMsg{
+			Seq:     r.req.Seq,
+			ErrCode: errCode,
+		}
+		if err := r.node.SendBinMessage(r.from, rpc.Actor_response, resp.Encode()); err != nil {
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+		}
+	}
+}
+
+func (r *Replyer) callHook() {
+	if r.hook == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, debug.Stack())))
+		}
+	}()
+	r.hook(r.req)
+}
+
+func (r *Replyer) Reply(ret proto.Message) {
+	if !r.req.Oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
+		r.callHook()
+		resp := &rpc.ResponseMsg{
+			Seq: r.req.Seq,
+		}
+
+		if b, err := proto.Marshal(ret); err != nil {
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+		} else {
+			resp.Ret = b
+		}
+
+		if err := r.node.SendBinMessage(r.from, rpc.Actor_response, resp.Encode()); err != nil {
+			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
+		}
+	}
+}
+
+type GrainContext struct {
 	mailbox      *Mailbox
-	pid          pd.Pid
-	methods      map[uint16]*methodCaller
-	userObject   UserObject
+	pid          string
+	methods      map[uint16]*rpc.MethodCaller
+	grain        Grain
 	lastRequest  atomic.Value
 	silo         *Silo
 	state        int
 	stoped       bool
 	deactiveTime time.Duration
-	before       []func(*Replyer, *RequestMsg) bool //前置管道线
+	before       []func(rpc.Replyer, *rpc.RequestMsg) bool //前置管道线
 }
 
-func newGrain(silo *Silo, pid pd.Pid, grainType string) *Grain {
+func newGrainContext(silo *Silo, pid string, grainType string) *GrainContext {
 
 	grainCfg, ok := silo.grainList[grainType]
 	if !ok {
 		return nil
 	}
 
-	grain := &Grain{
+	grainCtx := &GrainContext{
 		silo:    silo,
 		pid:     pid,
-		methods: map[uint16]*methodCaller{},
+		methods: map[uint16]*rpc.MethodCaller{},
 		mailbox: NewMailbox(MailboxOption{
 			UrgentQueueCap: grainCfg.NormalBoxCap,
 			NormalQueueCap: grainCfg.UrgentBoxCap,
@@ -70,132 +142,132 @@ func newGrain(silo *Silo, pid pd.Pid, grainType string) *Grain {
 		}),
 		deactiveTime: DefaultDeactiveTime,
 	}
-	grain.lastRequest.Store(time.Now())
-	grain.AfterFunc(GrainTickInterval, grain.tick)
-	grain.mailbox.Start()
-	return grain
+	grainCtx.lastRequest.Store(time.Now())
+	grainCtx.AfterFunc(GrainTickInterval, grainCtx.tick)
+	grainCtx.mailbox.Start()
+	return grainCtx
 }
 
 // 添加前置管道线处理
-func (grain *Grain) AddCallPipeline(fn func(*Replyer, *RequestMsg) bool) *Grain {
-	grain.before = append(grain.before, fn)
-	return grain
+func (grainCtx *GrainContext) AddCallPipeline(fn func(rpc.Replyer, *rpc.RequestMsg) bool) grain.Context {
+	grainCtx.before = append(grainCtx.before, fn)
+	return grainCtx
 }
 
-func (grain *Grain) SetDeactiveTime(deactiveTime time.Duration) {
-	grain.deactiveTime = deactiveTime
+func (grainCtx *GrainContext) SetDeactiveTime(deactiveTime time.Duration) {
+	grainCtx.deactiveTime = deactiveTime
 }
 
-func (grain *Grain) Pid() pd.Pid {
-	return grain.pid
+func (grainCtx *GrainContext) Pid() string {
+	return grainCtx.pid
 }
 
-func (grain *Grain) Await(fn interface{}, args ...interface{}) (ret []interface{}) {
-	return grain.mailbox.Await(fn, args...)
+func (grainCtx *GrainContext) Await(fn interface{}, args ...interface{}) (ret []interface{}) {
+	return grainCtx.mailbox.Await(fn, args...)
 }
 
-func (grain *Grain) RegisterMethod(method uint16, fn interface{}) error {
-	if caller, err := makeMethodCaller(fn); err != nil {
+func (grainCtx *GrainContext) RegisterMethod(method uint16, fn interface{}) error {
+	if caller, err := rpc.MakeMethodCaller(fn); err != nil {
 		return err
 	} else {
-		grain.methods[method] = caller
+		grainCtx.methods[method] = caller
 		return nil
 	}
 }
 
-func (grain *Grain) deactive(fn func()) {
-	if grain.state < grain_deactivating {
+func (grainCtx *GrainContext) deactive(fn func()) {
+	if grainCtx.state < grain_deactivating {
 		defer func() {
-			grain.silo.removeGrain(grain)
+			grainCtx.silo.removeGrain(grainCtx)
 			if fn == nil {
-				grain.mailbox.Close(false)
+				grainCtx.mailbox.Close(false)
 			} else {
 				go func() {
-					grain.mailbox.Close(true)
+					grainCtx.mailbox.Close(true)
 					fn()
 				}()
 			}
 		}()
 
-		grain.state = grain_deactivating
-		if grain.state != grain_un_activate {
+		grainCtx.state = grain_deactivating
+		if grainCtx.state != grain_un_activate {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
-			grain.silo.placementDriver.Deactivate(ctx, grain.pid)
+			grainCtx.silo.placementDriver.Deactivate(ctx, grainCtx.pid)
 		}
 	}
 }
 
-func (grain *Grain) serveCall(ctx context.Context, replyer *Replyer, req *RequestMsg) {
-	call := grain.methods[req.Method]
+func (grainCtx *GrainContext) serveCall(ctx context.Context, replyer *Replyer, req *rpc.RequestMsg) {
+	call := grainCtx.methods[req.Method]
 	if call == nil {
-		replyer.error(ErrCodeMethodNotExist)
+		replyer.error(rpc.ErrCodeMethodNotExist)
 		return
 	}
-	arg := reflect.New(call.argType).Interface().(proto.Message)
+	arg := reflect.New(call.ArgType).Interface().(proto.Message)
 	err := proto.Unmarshal(req.Arg, arg)
 	if err != nil {
-		replyer.error(ErrCodeInvaildArg)
+		replyer.error(rpc.ErrCodeInvaildArg)
 		return
 	}
-	req.arg = arg
+	req.Argument = arg
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, debug.Stack())))
-			replyer.error(ErrCodeMethodCallPanic)
+			replyer.error(rpc.ErrCodeMethodCallPanic)
 		}
 	}()
-	for _, v := range grain.before {
+	for _, v := range grainCtx.before {
 		if !v(replyer, req) {
 			return
 		}
 	}
-	call.fn.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(replyer), reflect.ValueOf(arg)})
+	call.Fn.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(replyer), reflect.ValueOf(arg)})
 }
 
-func (grain *Grain) tick() {
-	switch grain.state {
+func (grainCtx *GrainContext) tick() {
+	switch grainCtx.state {
 	case grain_un_activate, grain_activated, grain_running:
 		now := time.Now()
-		lastRequest := grain.lastRequest.Load().(time.Time)
-		if grain.mailbox.awaitCount.Load() == 0 && now.Sub(lastRequest) > grain.deactiveTime {
-			if grain.userObject == nil {
-				grain.deactive(nil)
-			} else if err := grain.userObject.Deactivate(); err != nil {
-				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grain.pid, err)
-				grain.AfterFunc(time.Second, grain.tick)
+		lastRequest := grainCtx.lastRequest.Load().(time.Time)
+		if grainCtx.mailbox.awaitCount.Load() == 0 && now.Sub(lastRequest) > grainCtx.deactiveTime {
+			if grainCtx.grain == nil {
+				grainCtx.deactive(nil)
+			} else if err := grainCtx.grain.Deactivate(); err != nil {
+				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grainCtx.pid, err)
+				grainCtx.AfterFunc(time.Second, grainCtx.tick)
 			} else {
-				grain.deactive(nil)
+				grainCtx.deactive(nil)
 			}
 		} else {
-			grain.AfterFunc(GrainTickInterval, grain.tick)
+			grainCtx.AfterFunc(GrainTickInterval, grainCtx.tick)
 		}
 	default:
 	}
 }
 
-func (grain *Grain) AfterFunc(d time.Duration, f func()) *Timer {
+func (grain *GrainContext) AfterFunc(d time.Duration, f func()) grain.Timer {
 	return grain.mailbox.AfterFunc(d, f)
 }
 
-func (grain *Grain) NewMutex() *Mutex {
-	return &Mutex{
+func (grain *GrainContext) NewBarrier() grain.Barrier {
+	return &Barrier{
 		m:        grain.mailbox,
 		waitlist: list.New(),
 	}
 }
 
-func (grain *Grain) onSiloStop(fn func()) {
-	grain.stoped = true
-	switch grain.state {
+func (grainCtx *GrainContext) onSiloStop(fn func()) {
+	grainCtx.stoped = true
+	switch grainCtx.state {
 	case grain_activated:
-		grain.deactive(fn)
+		grainCtx.deactive(fn)
 	case grain_running:
 		//只有当邮箱已经排空并且没有await调用才可以取消激活
-		if grain.mailbox.Empty() && grain.mailbox.awaitCount.Load() == 0 {
+		if grainCtx.mailbox.Empty() && grainCtx.mailbox.awaitCount.Load() == 0 {
 			var err error
 			for i := 0; i < 3; i++ {
-				if err = grain.userObject.Deactivate(); err != nil {
+				if err = grainCtx.grain.Deactivate(); err != nil {
 					time.Sleep(time.Second)
 				} else {
 					break
@@ -203,14 +275,14 @@ func (grain *Grain) onSiloStop(fn func()) {
 			}
 
 			if err != nil {
-				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grain.pid, err)
+				logger.Errorf("grain:%s Deactivate() error:%v", grainCtx.pid, err)
 			}
 
-			grain.deactive(fn)
+			grainCtx.deactive(fn)
 		} else {
 			//还有异步任务未完成，100毫秒后尝试
-			grain.AfterFunc(time.Millisecond*100, func() {
-				grain.onSiloStop(fn)
+			grainCtx.AfterFunc(time.Millisecond*100, func() {
+				grainCtx.onSiloStop(fn)
 			})
 		}
 	default:

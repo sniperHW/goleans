@@ -1,4 +1,4 @@
-package goleans
+package rpc
 
 import (
 	"context"
@@ -6,29 +6,26 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"runtime/debug"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/sniperHW/goleans/pd"
 
 	"github.com/sniperHW/clustergo"
 	"github.com/sniperHW/clustergo/addr"
+	"github.com/sniperHW/goleans/pd"
 	"github.com/sniperHW/netgo"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
-	lenSeq                = 8
-	lenOneWay             = 1
-	lenMethod             = 2
-	lenPidLen             = 2
-	lenErrCode            = 2
-	lenArg                = 4
-	lenReqHdr             = lenSeq + lenOneWay + lenMethod + lenPidLen
-	lenRspHdr             = lenSeq + lenErrCode
-	lenAddr               = 4
+	LenSeq                = 8
+	LenOneWay             = 1
+	LenMethod             = 2
+	LenPidLen             = 2
+	LenErrCode            = 2
+	LenArg                = 4
+	LenReqHdr             = LenSeq + LenOneWay + LenMethod + LenPidLen
+	LenRspHdr             = LenSeq + LenErrCode
+	LenAddr               = 4
 	Actor_request         = 11311
 	Actor_response        = 11312
 	Actor_notify_redirect = 11313
@@ -38,45 +35,13 @@ var (
 	RetryInterval = 100 * time.Millisecond //遇到ErrCodeRetryAgain错误时的重试间隔
 )
 
-const (
-	ErrCodeOk = iota
-	ErrCodeMethodCallPanic
-	ErrCodeInvaildArg
-	ErrCodeMethodNotExist
-	ErrCodeUserGrainCreateError
-	ErrCodeUserGrainInitError
-	ErrCodeRedirect
-	ErrCodeRetryAgain
-	ErrCodeInvaildIdentity
-)
-
-var errDesc []error = []error{
-	ErrCallOK,
-	ErrCallMethodPanic,
-	ErrCallInvaildArgument,
-	ErrCallMethodNotFound,
-	ErrCallGrainCreate,
-	ErrCallGrainInit,
-	ErrCallRedirect,
-	ErrCallRetry,
-	ErrCallInvaildIdentity,
-}
-
-func getDescByErrCode(code uint16) error {
-	if int(code) < len(errDesc) {
-		return errDesc[code]
-	} else {
-		return errors.New("unknow error")
-	}
-}
-
 type RequestMsg struct {
-	Seq    uint64
-	Method uint16
-	Oneway bool
-	To     pd.Pid
-	Arg    []byte
-	arg    proto.Message
+	Seq      uint64
+	Method   uint16
+	Oneway   bool
+	To       string
+	Arg      []byte
+	Argument proto.Message
 }
 
 type ResponseMsg struct {
@@ -86,23 +51,19 @@ type ResponseMsg struct {
 	Ret          []byte
 }
 
-func (r RequestMsg) GetArg() interface{} {
-	return r.arg
-}
-
 func (req *RequestMsg) Encode() []byte {
 
-	buff := make([]byte, lenReqHdr, lenReqHdr+len(req.To)+len(req.Arg))
+	buff := make([]byte, LenReqHdr, LenReqHdr+len(req.To)+len(req.Arg))
 
 	binary.BigEndian.PutUint64(buff, req.Seq)
 
 	if req.Oneway {
-		buff[lenSeq] = byte(1)
+		buff[LenSeq] = byte(1)
 	}
 
-	binary.BigEndian.PutUint16(buff[lenSeq+lenOneWay:], req.Method)
+	binary.BigEndian.PutUint16(buff[LenSeq+LenOneWay:], req.Method)
 
-	binary.BigEndian.PutUint16(buff[lenSeq+lenOneWay+lenMethod:], uint16(len(req.To)))
+	binary.BigEndian.PutUint16(buff[LenSeq+LenOneWay+LenMethod:], uint16(len(req.To)))
 
 	buff = append(buff, []byte(req.To)...)
 
@@ -114,35 +75,35 @@ func (req *RequestMsg) Encode() []byte {
 func (req *RequestMsg) Decode(buff []byte) error {
 	r := 0
 	buffLen := len(buff)
-	if buffLen-r < lenSeq {
+	if buffLen-r < LenSeq {
 		return errors.New("invaild request packet")
 	}
 	req.Seq = binary.BigEndian.Uint64(buff[r:])
 
-	r += lenSeq
-	if buffLen-r < lenOneWay {
+	r += LenSeq
+	if buffLen-r < LenOneWay {
 		return errors.New("invaild request packet")
 	}
 	if buff[r] == byte(1) {
 		req.Oneway = true
 	}
-	r += lenOneWay
-	if buffLen-r < lenMethod {
+	r += LenOneWay
+	if buffLen-r < LenMethod {
 		return errors.New("invaild request packet")
 	}
 	req.Method = binary.BigEndian.Uint16(buff[r:])
-	r += lenMethod
+	r += LenMethod
 
-	if buffLen-r < lenPidLen {
+	if buffLen-r < LenPidLen {
 		return errors.New("invaild request packet")
 	}
 	lenIdentity := int(binary.BigEndian.Uint16(buff[r:]))
-	r += lenPidLen
+	r += LenPidLen
 
 	if buffLen-r < lenIdentity {
 		return errors.New("invaild request packet")
 	}
-	req.To = pd.Pid(buff[r : r+lenIdentity])
+	req.To = string(buff[r : r+lenIdentity])
 	r += lenIdentity
 
 	if buffLen-r > 0 {
@@ -155,14 +116,14 @@ func (req *RequestMsg) Decode(buff []byte) error {
 
 func (resp *ResponseMsg) Encode() (buff []byte) {
 	if resp.ErrCode == ErrCodeRedirect {
-		buff = make([]byte, lenRspHdr+lenAddr)
+		buff = make([]byte, LenRspHdr+LenAddr)
 		binary.BigEndian.PutUint64(buff, resp.Seq)
-		binary.BigEndian.PutUint16(buff[lenSeq:], uint16(resp.ErrCode))
-		binary.BigEndian.PutUint32(buff[lenSeq+lenErrCode:], uint32(resp.RedirectAddr))
+		binary.BigEndian.PutUint16(buff[LenSeq:], uint16(resp.ErrCode))
+		binary.BigEndian.PutUint32(buff[LenSeq+LenErrCode:], uint32(resp.RedirectAddr))
 	} else {
-		buff = make([]byte, lenRspHdr, lenRspHdr+len(resp.Ret))
+		buff = make([]byte, LenRspHdr, LenRspHdr+len(resp.Ret))
 		binary.BigEndian.PutUint64(buff, resp.Seq)
-		binary.BigEndian.PutUint16(buff[lenSeq:], uint16(resp.ErrCode))
+		binary.BigEndian.PutUint16(buff[LenSeq:], uint16(resp.ErrCode))
 		buff = append(buff, resp.Ret...)
 	}
 	return buff
@@ -171,18 +132,18 @@ func (resp *ResponseMsg) Encode() (buff []byte) {
 func (resp *ResponseMsg) Decode(buff []byte) error {
 	r := 0
 	buffLen := len(buff)
-	if buffLen-r < lenSeq {
+	if buffLen-r < LenSeq {
 		return errors.New("invaild response packet")
 	}
 	resp.Seq = binary.BigEndian.Uint64(buff[r:])
-	r += lenSeq
+	r += LenSeq
 
-	if buffLen-r < lenErrCode {
+	if buffLen-r < LenErrCode {
 		return errors.New("invaild response packet")
 	}
 
 	resp.ErrCode = int(binary.BigEndian.Uint16(buff[r:]))
-	r += lenErrCode
+	r += LenErrCode
 
 	if resp.ErrCode == ErrCodeRedirect {
 		if buffLen-r >= 4 {
@@ -199,115 +160,46 @@ func (resp *ResponseMsg) Decode(buff []byte) error {
 
 ////server
 
-type Replyer struct {
-	req     *RequestMsg
-	replyed int32
-	from    addr.LogicAddr
-	node    *clustergo.Node
-	hook    func(*RequestMsg)
+type Replyer interface {
+	SetReplyHook(func(*RequestMsg))
+	Reply(ret proto.Message)
 }
 
-func (r *Replyer) SetReplyHook(hook func(_ *RequestMsg)) {
-	r.hook = hook
-}
-
-func (r *Replyer) redirect(redirectAddr addr.LogicAddr) {
-	if r.req.Oneway {
-		//通告对端identity不在当前节点
-		buff := make([]byte, lenAddr, len(r.req.To)+lenAddr)
-		binary.BigEndian.PutUint32(buff, uint32(redirectAddr))
-		buff = append(buff, []byte(r.req.To)...)
-		r.node.SendBinMessage(r.from, Actor_notify_redirect, buff)
-	} else if atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
-		resp := &ResponseMsg{
-			Seq:          r.req.Seq,
-			ErrCode:      ErrCodeRedirect,
-			RedirectAddr: int(redirectAddr),
-		}
-		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
-			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
-		}
-	}
-}
-
-func (r *Replyer) error(errCode int) {
-	if !r.req.Oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
-		resp := &ResponseMsg{
-			Seq:     r.req.Seq,
-			ErrCode: errCode,
-		}
-		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
-			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
-		}
-	}
-}
-
-func (r *Replyer) callHook() {
-	if r.hook == nil {
-		return
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Errorf("%s ", fmt.Errorf(fmt.Sprintf("%v: %s", r, debug.Stack())))
-		}
-	}()
-	r.hook(r.req)
-}
-
-func (r *Replyer) Reply(ret proto.Message) {
-	if !r.req.Oneway && atomic.CompareAndSwapInt32(&r.replyed, 0, 1) {
-		r.callHook()
-		resp := &ResponseMsg{
-			Seq: r.req.Seq,
-		}
-
-		if b, err := proto.Marshal(ret); err != nil {
-			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
-		} else {
-			resp.Ret = b
-		}
-
-		if err := r.node.SendBinMessage(r.from, Actor_response, resp.Encode()); err != nil {
-			logger.Errorf("send actor rpc response to (%s) error:%s\n", r.from.String(), err.Error())
-		}
-	}
-}
-
-type methodCaller struct {
-	argType reflect.Type
-	fn      reflect.Value
+type MethodCaller struct {
+	ArgType reflect.Type
+	Fn      reflect.Value
 }
 
 // 接受的method func(context.Context, *Replyer,proto.Message)
-func makeMethodCaller(method interface{}) (*methodCaller, error) {
+func MakeMethodCaller(method interface{}) (*MethodCaller, error) {
 	if method == nil {
 		return nil, errors.New("method is nil")
 	}
 
 	fnType := reflect.TypeOf(method)
 	if fnType.Kind() != reflect.Func {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
+		return nil, errors.New("method should have type func(context.Contex,Replyer,proto.Message)")
 	}
 
 	if fnType.NumIn() != 3 {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
+		return nil, errors.New("method should have type func(context.Contex,Replyer,proto.Message)")
 	}
 
-	if !fnType.In(0).Implements(reflect.TypeOf((*context.Context)(nil)).Elem()) {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
+	if fnType.In(0) != reflect.TypeOf((*context.Context)(nil)).Elem() {
+		return nil, errors.New("method should have type func(context.Contex,Replyer,proto.Message)")
 	}
 
-	if fnType.In(1) != reflect.TypeOf(&Replyer{}) {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
+	if fnType.In(1) != reflect.TypeOf((*Replyer)(nil)).Elem() {
+		return nil, errors.New("method should have type func(context.Contex,Replyer,proto.Message)")
 	}
 
 	if !fnType.In(2).Implements(reflect.TypeOf((*proto.Message)(nil)).Elem()) {
-		return nil, errors.New("method should have type func(context.Contex,*Replyer,proto.Message)")
+		return nil, errors.New("method should have type func(context.Contex,Replyer,proto.Message)")
 	}
 
-	caller := &methodCaller{
-		argType: fnType.In(2).Elem(),
-		fn:      reflect.ValueOf(method),
+	caller := &MethodCaller{
+		ArgType: fnType.In(2).Elem(),
+		Fn:      reflect.ValueOf(method),
 	}
 
 	return caller, nil
@@ -318,7 +210,7 @@ var respWaitPool = sync.Pool{
 	New: func() interface{} { return make(chan *ResponseMsg, 1) },
 }
 
-type RPCClient struct {
+type Client struct {
 	sync.Mutex
 	nextSequence    uint32
 	timestamp       uint32
@@ -329,8 +221,8 @@ type RPCClient struct {
 	placementDriver pd.PlacementDriver
 }
 
-func NewRPCClient(node *clustergo.Node, placementDriver pd.PlacementDriver) *RPCClient {
-	return &RPCClient{
+func NewClient(node *clustergo.Node, placementDriver pd.PlacementDriver) *Client {
+	return &Client{
 		timeOffset:      uint32(time.Now().Unix() - time.Date(2023, time.January, 1, 0, 0, 0, 0, time.Local).Unix()),
 		startTime:       time.Now(),
 		node:            node,
@@ -338,11 +230,11 @@ func NewRPCClient(node *clustergo.Node, placementDriver pd.PlacementDriver) *RPC
 	}
 }
 
-func (c *RPCClient) getTimeStamp() uint32 {
+func (c *Client) getTimeStamp() uint32 {
 	return uint32(time.Since(c.startTime)/time.Second) + c.timeOffset
 }
 
-func (c *RPCClient) makeSequence() (seq uint64) {
+func (c *Client) makeSequence() (seq uint64) {
 	timestamp := c.getTimeStamp()
 	c.Lock()
 	if timestamp > c.timestamp {
@@ -356,11 +248,11 @@ func (c *RPCClient) makeSequence() (seq uint64) {
 	return seq
 }
 
-func (c *RPCClient) OnRPCResponse(resp *ResponseMsg) {
+func (c *Client) OnRPCResponse(resp *ResponseMsg) {
 	if ctx, ok := c.pendingCall[int(resp.Seq)%len(c.pendingCall)].LoadAndDelete(resp.Seq); ok {
 		ctx.(chan *ResponseMsg) <- resp
 	} else {
-		logger.Infof("onResponse with no reqContext:%d", resp.Seq)
+		fmt.Println("onResponse with no reqContext:", resp.Seq)
 	}
 }
 
@@ -375,13 +267,13 @@ func rpcError(err error) error {
 	}
 }
 
-func (c *RPCClient) CallWithTimeout(pid pd.Pid, method uint16, arg proto.Message, ret proto.Message, d time.Duration) error {
+func (c *Client) CallWithTimeout(pid string, method uint16, arg proto.Message, ret proto.Message, d time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	return c.Call(ctx, pid, method, arg, ret)
 }
 
-func (c *RPCClient) Call(ctx context.Context, pid pd.Pid, method uint16, arg proto.Message, ret proto.Message) error {
+func (c *Client) Call(ctx context.Context, pid string, method uint16, arg proto.Message, ret proto.Message) error {
 	if b, err := proto.Marshal(arg); err != nil {
 		return err
 	} else {
