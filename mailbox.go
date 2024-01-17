@@ -33,6 +33,7 @@ type ringqueue[T any] struct {
 	cond      *sync.Cond
 	locker    sync.Locker
 	waitCount int
+	cap       int
 }
 
 func newRingQueue[T any](cap int, l sync.Locker) *ringqueue[T] {
@@ -43,6 +44,7 @@ func newRingQueue[T any](cap int, l sync.Locker) *ringqueue[T] {
 		queue:  make([]T, cap+1),
 		cond:   sync.NewCond(l),
 		locker: l,
+		cap:    cap,
 	}
 	return ring
 }
@@ -247,56 +249,71 @@ func (co *goroutine) loop(m *Mailbox) {
 				m.doTimer()
 			}
 
-			if !m.awaitQueue.empty() {
-				gotine := m.awaitQueue.pop()
-				m.awaitQueue.signalAndUnlock()
-				m.awaitCount.Add(-1)
-				//1
-				gotine.resume(m)
-				//actor的执行将由Await.1继续，当前goroutine退出循环
-				return
-			} else if !m.urgentQueue.empty() {
-				fn := m.urgentQueue.pop()
-				m.urgentQueue.signalAndUnlock()
-				fn()
-				break
-			} else if m.suspended {
-				if m.closed && m.awaitCount.Load() == 0 && m.normalQueue.empty() {
-					m.mtx.Unlock()
-					close(m.closeCh)
+			if m.awaitCount.Load() == int32(m.awaitQueue.cap) {
+				//到达并发度上限，不提取任务执行,只等待异步任务返回
+				if !m.awaitQueue.empty() {
+					gotine := m.awaitQueue.pop()
+					m.awaitQueue.signalAndUnlock()
+					m.awaitCount.Add(-1)
+					//1
+					gotine.resume(m)
+					//actor的执行将由Await.1继续，当前goroutine退出循环
 					return
 				} else {
 					m.wait()
+				}
+			} else {
+				if !m.awaitQueue.empty() {
+					gotine := m.awaitQueue.pop()
+					m.awaitQueue.signalAndUnlock()
+					m.awaitCount.Add(-1)
+					//1
+					gotine.resume(m)
+					//actor的执行将由Await.1继续，当前goroutine退出循环
+					return
+				} else if !m.urgentQueue.empty() {
+					fn := m.urgentQueue.pop()
+					m.urgentQueue.signalAndUnlock()
+					fn()
+					break
+				} else if m.suspended {
+					if m.closed && m.awaitCount.Load() == 0 && m.normalQueue.empty() {
+						m.mtx.Unlock()
+						close(m.closeCh)
+						return
+					} else {
+						m.wait()
+						c = 0
+					}
+				} else if !m.normalQueue.empty() {
+					fn := m.normalQueue.pop()
+					m.normalQueue.signalAndUnlock()
+					fn()
+					break
+				} else {
+					if m.closed && m.awaitCount.Load() == 0 {
+						m.mtx.Unlock()
+						close(m.closeCh)
+						return
+					}
+					m.wait()
 					c = 0
 				}
-			} else if !m.normalQueue.empty() {
-				fn := m.normalQueue.pop()
-				m.normalQueue.signalAndUnlock()
-				fn()
-				break
-			} else {
-				if m.closed && m.awaitCount.Load() == 0 {
-					m.mtx.Unlock()
-					close(m.closeCh)
-					return
-				}
-				m.wait()
-				c = 0
+				/* else if !m.normalQueue.empty() {
+					fn := m.normalQueue.pop()
+					m.normalQueue.signalAndUnlock()
+					fn()
+					break
+				} else {
+					if m.closed && m.awaitCount.Load() == 0 {
+						m.mtx.Unlock()
+						close(m.closeCh)
+						return
+					}
+					m.wait()
+					c = 0
+				}*/
 			}
-			/* else if !m.normalQueue.empty() {
-				fn := m.normalQueue.pop()
-				m.normalQueue.signalAndUnlock()
-				fn()
-				break
-			} else {
-				if m.closed && m.awaitCount.Load() == 0 {
-					m.mtx.Unlock()
-					close(m.closeCh)
-					return
-				}
-				m.wait()
-				c = 0
-			}*/
 		}
 	}
 }

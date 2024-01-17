@@ -40,7 +40,7 @@ func TestBenchmarkAwait(t *testing.T) {
 	box := NewMailbox(MailboxOption{
 		UrgentQueueCap: 1,
 		NormalQueueCap: 64,
-		AwaitQueueCap:  1,
+		AwaitQueueCap:  32,
 	})
 
 	box.Start()
