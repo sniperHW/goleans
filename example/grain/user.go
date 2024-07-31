@@ -43,7 +43,7 @@ func (u *User) SendToUser(msg *codec.Message) {
 func (u *User) ServeEcho(ctx context.Context, replyer *echo.Replyer, arg *echo.EchoReq) {
 	time.Sleep(time.Second * 2) //阻塞当前grain
 	replyer.Reply(&echo.EchoRsp{
-		Msg: fmt.Sprintf("echo response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.grainCtx.Pid(), arg.Msg),
+		Msg: fmt.Sprintf("echo response from (%s:%s) msg:%s", u.Node.Addr().LogicAddr().String(), u.ctx.Pid(), arg.Msg),
 	})
 }
 
