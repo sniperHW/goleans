@@ -25,7 +25,7 @@ var (
 )
 
 // 不作为Silo启动
-func Start(memberShip membership.Client, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver) error {
+func Start(memberShip membership.Subscribe, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
@@ -52,7 +52,7 @@ func Start(memberShip membership.Client, localAddr addr.LogicAddr, placementDriv
 }
 
 // 作为Silo启动
-func StartSilo(memberShip membership.Client, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []GrainCfg, grainFactory func(string) Grain) error {
+func StartSilo(memberShip membership.Subscribe, localAddr addr.LogicAddr, placementDriver pd.PlacementDriver, grainList []GrainCfg, grainFactory func(string) Grain) error {
 	ok := false
 	startOnce.Do(func() {
 		ok = true
