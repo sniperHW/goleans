@@ -299,8 +299,7 @@ func createSilo(node *clustergo.Node, pdc *placementDriverClient) *Silo {
 	silo, _ := newSilo(context.Background(), pdc, node, []GrainCfg{
 		{
 			Type:          "User",
-			NormalBoxCap:  32,
-			UrgentBoxCap:  32,
+			QueueCap:      32,
 			AwaitQueueCap: 23,
 		},
 	}, factory)
@@ -349,8 +348,7 @@ func TestGoleans(t *testing.T) {
 	err := StartSilo(localDiscovery, node1Addr.LogicAddr(), pdClient1, []GrainCfg{
 		{
 			Type:          "User",
-			NormalBoxCap:  32,
-			UrgentBoxCap:  32,
+			QueueCap:      32,
 			AwaitQueueCap: 23,
 		},
 	}, factory)

@@ -15,8 +15,7 @@ import (
 
 type GrainCfg struct {
 	Type          string
-	NormalBoxCap  int
-	UrgentBoxCap  int
+	QueueCap      int
 	AwaitQueueCap int
 }
 

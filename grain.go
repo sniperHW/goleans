@@ -136,9 +136,8 @@ func newGrainContext(silo *Silo, pid string, grainType string) *GrainContext {
 		pid:     pid,
 		methods: map[uint16]*rpc.MethodCaller{},
 		mailbox: NewMailbox(MailboxOption{
-			UrgentQueueCap: grainCfg.NormalBoxCap,
-			NormalQueueCap: grainCfg.UrgentBoxCap,
-			AwaitQueueCap:  grainCfg.AwaitQueueCap,
+			QueueCap:      grainCfg.QueueCap,
+			AwaitQueueCap: grainCfg.AwaitQueueCap,
 		}),
 		deactiveTime: DefaultDeactiveTime,
 	}

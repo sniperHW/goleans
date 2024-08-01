@@ -99,16 +99,13 @@ type Mailbox struct {
 	continueTaskLimits int //>0，连续执行continueTaskLimits个任务后让出时间片，避免其他actor饥饿。
 	closeCh            chan struct{}
 	waiting            bool
-	suspended          bool
 	cond               *sync.Cond
 	awaitQueue         *ringqueue[*goroutine]
-	urgentQueue        *ringqueue[func()]
-	normalQueue        *ringqueue[func()]
+	taskQueue          *ringqueue[func()]
 }
 
 type MailboxOption struct {
-	UrgentQueueCap     int
-	NormalQueueCap     int
+	QueueCap           int
 	AwaitQueueCap      int
 	ContinueTaskLimits int
 }
@@ -118,8 +115,7 @@ func NewMailbox(opt MailboxOption) *Mailbox {
 		closeCh: make(chan struct{}),
 	}
 	m.awaitQueue = newRingQueue[*goroutine](opt.AwaitQueueCap, &m.mtx)
-	m.urgentQueue = newRingQueue[func()](opt.UrgentQueueCap, &m.mtx)
-	m.normalQueue = newRingQueue[func()](opt.NormalQueueCap, &m.mtx)
+	m.taskQueue = newRingQueue[func()](opt.QueueCap, &m.mtx)
 	m.cond = sync.NewCond(&m.mtx)
 	m.continueTaskLimits = opt.ContinueTaskLimits
 	return m
@@ -155,14 +151,14 @@ func (m *Mailbox) Input(fn func()) error {
 		m.mtx.Unlock()
 		return errors.New("mailbox closed")
 	}
-	for m.normalQueue.full() {
-		m.normalQueue.wait()
+	for m.taskQueue.full() {
+		m.taskQueue.wait()
 		if m.closed {
 			m.mtx.Unlock()
 			return errors.New("mailbox closed")
 		}
 	}
-	m.normalQueue.put(fn)
+	m.taskQueue.put(fn)
 	m.signalAndUnlock()
 	return nil
 }
@@ -172,29 +168,11 @@ func (m *Mailbox) InputNoWait(fn func()) error {
 	if m.closed {
 		m.mtx.Unlock()
 		return errors.New("mailbox closed")
-	} else if m.normalQueue.full() {
+	} else if m.taskQueue.full() {
 		m.mtx.Unlock()
 		return errors.New("full")
 	}
-	m.normalQueue.put(fn)
-	m.signalAndUnlock()
-	return nil
-}
-
-func (m *Mailbox) InputUrgent(fn func()) error {
-	m.mtx.Lock()
-	if m.closed {
-		m.mtx.Unlock()
-		return errors.New("mailbox closed")
-	}
-	for m.urgentQueue.full() {
-		m.urgentQueue.wait()
-		if m.closed {
-			m.mtx.Unlock()
-			return errors.New("mailbox closed")
-		}
-	}
-	m.urgentQueue.put(fn)
+	m.taskQueue.put(fn)
 	m.signalAndUnlock()
 	return nil
 }
@@ -271,23 +249,9 @@ func (co *goroutine) loop(m *Mailbox) {
 					gotine.resume(m)
 					//actor的执行将由Await.1继续，当前goroutine退出循环
 					return
-				} else if !m.urgentQueue.empty() {
-					fn := m.urgentQueue.pop()
-					m.urgentQueue.signalAndUnlock()
-					fn()
-					break
-				} else if m.suspended {
-					if m.closed && m.awaitCount.Load() == 0 && m.normalQueue.empty() {
-						m.mtx.Unlock()
-						close(m.closeCh)
-						return
-					} else {
-						m.wait()
-						c = 0
-					}
-				} else if !m.normalQueue.empty() {
-					fn := m.normalQueue.pop()
-					m.normalQueue.signalAndUnlock()
+				} else if !m.taskQueue.empty() {
+					fn := m.taskQueue.pop()
+					m.taskQueue.signalAndUnlock()
 					fn()
 					break
 				} else {
@@ -299,20 +263,6 @@ func (co *goroutine) loop(m *Mailbox) {
 					m.wait()
 					c = 0
 				}
-				/* else if !m.normalQueue.empty() {
-					fn := m.normalQueue.pop()
-					m.normalQueue.signalAndUnlock()
-					fn()
-					break
-				} else {
-					if m.closed && m.awaitCount.Load() == 0 {
-						m.mtx.Unlock()
-						close(m.closeCh)
-						return
-					}
-					m.wait()
-					c = 0
-				}*/
 			}
 		}
 	}
@@ -344,19 +294,7 @@ func (m *Mailbox) Start() {
 func (m *Mailbox) Empty() bool {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-	return m.urgentQueue.empty() && m.normalQueue.empty()
-}
-
-func (m *Mailbox) Suspend() {
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-	m.suspended = true
-}
-
-func (m *Mailbox) Resume() {
-	m.mtx.Lock()
-	m.suspended = false
-	m.signalAndUnlock()
+	return m.taskQueue.empty()
 }
 
 func call(fn interface{}, args ...interface{}) (result []interface{}) {
@@ -437,8 +375,7 @@ func (m *Mailbox) Close(wait bool) {
 	m.mtx.Lock()
 	if !m.closed {
 		m.closed = true
-		m.normalQueue.broadcast()
-		m.urgentQueue.broadcast()
+		m.taskQueue.broadcast()
 		m.signalAndUnlock()
 	} else {
 		m.mtx.Unlock()

@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,9 +11,8 @@ import (
 
 func TestBenchmarkMailbox(t *testing.T) {
 	box := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
+		QueueCap:      64,
+		AwaitQueueCap: 64,
 	})
 
 	box.Start()
@@ -38,9 +36,8 @@ func TestBenchmarkMailbox(t *testing.T) {
 
 func TestBenchmarkAwait(t *testing.T) {
 	box := NewMailbox(MailboxOption{
-		UrgentQueueCap: 1,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  32,
+		QueueCap:      64,
+		AwaitQueueCap: 32,
 	})
 
 	box.Start()
@@ -188,9 +185,8 @@ func BenchmarkChannel(b *testing.B) {
 
 func BenchmarkMailbox(b *testing.B) {
 	box := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
+		QueueCap:      64,
+		AwaitQueueCap: 64,
 	})
 
 	box.Start()
@@ -209,9 +205,8 @@ func BenchmarkMailbox(b *testing.B) {
 
 func BenchmarkAwait(b *testing.B) {
 	box := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
+		QueueCap:      64,
+		AwaitQueueCap: 64,
 	})
 
 	box.Start()
@@ -232,9 +227,8 @@ func BenchmarkAwait(b *testing.B) {
 func TestMailbox(t *testing.T) {
 	{
 		box := NewMailbox(MailboxOption{
-			UrgentQueueCap: 64,
-			NormalQueueCap: 64,
-			AwaitQueueCap:  64,
+			QueueCap:      64,
+			AwaitQueueCap: 64,
 		})
 
 		box.Start()
@@ -252,9 +246,8 @@ func TestMailbox(t *testing.T) {
 
 	{
 		box := NewMailbox(MailboxOption{
-			UrgentQueueCap: 64,
-			NormalQueueCap: 64,
-			AwaitQueueCap:  64,
+			QueueCap:      64,
+			AwaitQueueCap: 64,
 		})
 
 		box.Start()
@@ -275,14 +268,13 @@ func TestMailbox(t *testing.T) {
 func TestAwait(t *testing.T) {
 
 	box := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
+		QueueCap:      64,
+		AwaitQueueCap: 64,
 	})
 
 	box.Start()
 
-	box.InputUrgent(func() {
+	box.Input(func() {
 		fmt.Println("hello")
 		box.Await(func() {
 			time.Sleep(time.Millisecond * 10)
@@ -295,50 +287,10 @@ func TestAwait(t *testing.T) {
 	fmt.Println("box closed")
 }
 
-func TestSuspend(t *testing.T) {
-	s := NewMailbox(MailboxOption{
-		UrgentQueueCap: 2,
-		NormalQueueCap: 8,
-		AwaitQueueCap:  64,
-	})
-
-	s.Start()
-
-	s.Suspend()
-
-	//suspend之后普通消息不会执行
-	for i := 0; i < 9; i++ {
-		v := i
-		err := s.InputNoWait(func() {
-			fmt.Println("msg", v)
-		})
-		if err != nil {
-			fmt.Println(err, i)
-		}
-	}
-
-	var wait sync.WaitGroup
-	//urgent消息不受影响
-	for i := 0; i < 10; i++ {
-		wait.Add(1)
-		v := i
-		s.InputUrgent(func() {
-			fmt.Println("urgent", v)
-			wait.Done()
-		})
-	}
-
-	//resume后，普通消息得以执行
-	s.Resume()
-
-	s.Close(true)
-}
-
 func TestNornal(t *testing.T) {
 	s := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
+		QueueCap:      64,
+		AwaitQueueCap: 64,
 	})
 
 	c := make(chan struct{})
@@ -364,50 +316,10 @@ func TestNornal(t *testing.T) {
 
 }
 
-func TestUrgent(t *testing.T) {
-	s := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
-	})
-
-	urgent := int32(0)
-
-	s.Input(func() {
-		fmt.Println("normal")
-		//if atomic.LoadInt32(&urgent) != 65 {
-		//	panic("panic")
-		//}
-	})
-
-	c := make(chan struct{})
-	go func() {
-		for i := 0; i < 64; i++ {
-			s.InputUrgent(func() {
-				fmt.Println("urgent", atomic.AddInt32(&urgent, 1))
-			})
-		}
-		//fmt.Println(s.PutUrgentNoWait(func() {
-		//	fmt.Println("urgent nowait")
-		//}))
-		s.InputUrgent(func() {
-			fmt.Println("urgent", atomic.AddInt32(&urgent, 1))
-		})
-
-		close(c)
-	}()
-
-	time.Sleep(time.Second)
-	s.Start()
-	<-c
-	s.Close(true)
-}
-
 func TestBarrier(t *testing.T) {
 	s := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
+		QueueCap:      64,
+		AwaitQueueCap: 64,
 	})
 
 	mtx := &Barrier{
@@ -450,9 +362,8 @@ func TestBarrier(t *testing.T) {
 func TestTimer(t *testing.T) {
 
 	box := NewMailbox(MailboxOption{
-		UrgentQueueCap: 64,
-		NormalQueueCap: 64,
-		AwaitQueueCap:  64,
+		QueueCap:      64,
+		AwaitQueueCap: 64,
 	})
 
 	box.Start()
