@@ -146,29 +146,29 @@ func (p *placementDriver) GetPlacement(selfAddr addr.LogicAddr, pid string) (add
 	}
 }
 
-func (p *placementDriver) Deactivate(siloAddr addr.LogicAddr, pid string) {
+func (p *placementDriver) Remove(siloAddr addr.LogicAddr, pid string) {
 	p.Lock()
 	defer p.Unlock()
 	silo, ok := p.placement[pid]
-	logger.Debugf("Deactivate")
+	logger.Debugf("Remove")
 	if ok && silo.logicAddr == siloAddr {
-		logger.Debugf("Deactivate %v", silo.logicAddr.String())
+		logger.Debugf("Remove %v", silo.logicAddr.String())
 		delete(silo.grains, pid)
 		delete(p.placement, pid)
 	}
 }
 
-func (p *placementDriver) Activate(siloAddr addr.LogicAddr, pid string) error {
+func (p *placementDriver) Place(siloAddr addr.LogicAddr, pid string) error {
 	p.Lock()
 	defer p.Unlock()
-	logger.Debugf("Activate")
+	logger.Debugf("Place")
 	silo, ok := p.placement[pid]
 	if !ok {
 		for _, v := range p.silos {
 			if v.logicAddr == siloAddr {
 				v.grains[pid] = struct{}{}
 				p.placement[pid] = v
-				logger.Debugf("Activate %v", siloAddr.String())
+				logger.Debugf("Place %v", siloAddr.String())
 				return nil
 			}
 		}
@@ -226,12 +226,12 @@ func (pdc *placementDriverClient) GetPlacement(ctx context.Context, pid string) 
 	}
 }
 
-func (pdc *placementDriverClient) Activate(ctx context.Context, pid string) error {
-	return pdc.driver.Activate(pdc.selfAddr, pid)
+func (pdc *placementDriverClient) Place(ctx context.Context, pid string) error {
+	return pdc.driver.Place(pdc.selfAddr, pid)
 }
 
-func (pdc *placementDriverClient) Deactivate(ctx context.Context, pid string) error {
-	pdc.driver.Deactivate(pdc.selfAddr, pid)
+func (pdc *placementDriverClient) Remove(ctx context.Context, pid string) error {
+	pdc.driver.Remove(pdc.selfAddr, pid)
 	return nil
 }
 

@@ -30,11 +30,10 @@ type Grain interface {
 }
 
 const (
-	grain_un_activate  = 0 //尚未激活
-	grain_activated    = 1 //已经激活
-	grain_running      = 2
+	grain_un_place     = 0 //尚未放置
+	grain_place_ok     = 1 //已经放置
+	grain_activated    = 2 //已经激活
 	grain_deactivating = 3
-	grain_destroy      = 4
 )
 
 type Replyer struct {
@@ -174,26 +173,32 @@ func (grainCtx *GrainContext) RegisterMethod(method uint16, fn interface{}) erro
 	}
 }
 
-func (grainCtx *GrainContext) deactive(fn func()) {
-	if grainCtx.state < grain_deactivating {
+func (grainCtx *GrainContext) deactive(fn ...func()) {
+	if grainCtx.state != grain_deactivating {
 		defer func() {
-			grainCtx.silo.removeGrain(grainCtx)
-			if fn == nil {
+			var f func()
+			if len(fn) > 0 {
+				f = fn[0]
+			}
+
+			if f == nil {
 				grainCtx.mailbox.Close(false)
+				grainCtx.silo.removeGrain(grainCtx)
 			} else {
 				go func() {
 					grainCtx.mailbox.Close(true)
-					fn()
+					f()
+					grainCtx.silo.removeGrain(grainCtx)
 				}()
 			}
 		}()
 
-		grainCtx.state = grain_deactivating
-		if grainCtx.state != grain_un_activate {
+		if grainCtx.state != grain_un_place {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
-			grainCtx.silo.placementDriver.Deactivate(ctx, grainCtx.pid)
+			grainCtx.silo.placementDriver.Remove(ctx, grainCtx.pid)
 		}
+		grainCtx.state = grain_deactivating
 	}
 }
 
@@ -226,17 +231,17 @@ func (grainCtx *GrainContext) serveCall(ctx context.Context, replyer *Replyer, r
 
 func (grainCtx *GrainContext) tick() {
 	switch grainCtx.state {
-	case grain_un_activate, grain_activated, grain_running:
+	case grain_un_place, grain_place_ok, grain_activated:
 		now := time.Now()
 		lastRequest := grainCtx.lastRequest.Load().(time.Time)
 		if grainCtx.mailbox.awaitCount.Load() == 0 && now.Sub(lastRequest) > grainCtx.deactiveTime {
 			if grainCtx.grain == nil {
-				grainCtx.deactive(nil)
+				grainCtx.deactive()
 			} else if err := grainCtx.grain.Deactivate(); err != nil {
 				logger.Errorf("grain:%s userObject.Deactivate() error:%v", grainCtx.pid, err)
 				grainCtx.AfterFunc(time.Second, grainCtx.tick)
 			} else {
-				grainCtx.deactive(nil)
+				grainCtx.deactive()
 			}
 		} else {
 			grainCtx.AfterFunc(GrainTickInterval, grainCtx.tick)
@@ -259,9 +264,9 @@ func (grain *GrainContext) NewBarrier() grain.Barrier {
 func (grainCtx *GrainContext) onSiloStop(fn func()) {
 	grainCtx.stoped = true
 	switch grainCtx.state {
-	case grain_activated:
+	case grain_place_ok:
 		grainCtx.deactive(fn)
-	case grain_running:
+	case grain_activated:
 		//只有当邮箱已经排空并且没有await调用才可以取消激活
 		if grainCtx.mailbox.Empty() && grainCtx.mailbox.awaitCount.Load() == 0 {
 			var err error

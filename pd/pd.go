@@ -43,11 +43,11 @@ type PlacementDriver interface {
 
 	ResetPlacementCache(string, addr.LogicAddr)
 
-	Deactivate(context.Context, string) error
+	Place(context.Context, string) error
 
 	/*
 	 *  尝试请求pd将Pid的地址锁定为请求Silo的地址
 	 *  如果Pid已经被其它Silo锁定，将返回ErrorRedirect,Addr字段含有重定向地址
 	 */
-	Activate(context.Context, string) error
+	Remove(context.Context, string) error
 }

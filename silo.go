@@ -133,33 +133,33 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *rpc.R
 			return
 		}
 
-		if grainCtx.state == grain_un_activate {
+		if grainCtx.state == grain_un_place {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1000)
-			err := s.placementDriver.Activate(ctx, identity)
+			err := s.placementDriver.Place(ctx, identity)
 			cancel()
 			switch err := err.(type) {
 			case pd.ErrorRedirect:
-				logger.Errorf("Activate Grain:%s redirect to:%s", grainCtx.Pid(), err.Addr.String())
+				logger.Errorf("Place Grain:%s redirect to:%s", grainCtx.Pid(), err.Addr.String())
 				replyer.redirect(err.Addr)
 				s.removeGrain(grainCtx)
 				grainCtx.mailbox.Close(false)
 				return
 			case error:
-				logger.Errorf("Activate Grain:%s error:%v", grainCtx.Pid(), err)
+				logger.Errorf("Place Grain:%s error:%v", grainCtx.Pid(), err)
 				replyer.error(rpc.ErrCodeRetryAgain)
 				s.removeGrain(grainCtx)
 				grainCtx.mailbox.Close(false)
 				return
 			default:
-				grainCtx.state = grain_activated
+				grainCtx.state = grain_place_ok
 			}
 		}
 
-		if grainCtx.state == grain_activated {
+		if grainCtx.state == grain_place_ok {
 			if grainCtx.grain == nil {
 				if grain := s.grainFactory(grainType); nil == grain {
 					logger.Errorf("Create Grain:%s Failed", grainCtx.Pid())
-					grainCtx.deactive(nil)
+					grainCtx.deactive()
 					replyer.redirect(addr.LogicAddr(0))
 					return
 				} else {
@@ -172,17 +172,17 @@ func (s *Silo) OnRPCRequest(ctx context.Context, from addr.LogicAddr, req *rpc.R
 				if retry {
 					replyer.error(rpc.ErrCodeRetryAgain)
 				} else {
-					grainCtx.deactive(nil)
+					grainCtx.deactive()
 					//通告调用方，调用不应再尝试
 					replyer.error(rpc.ErrCodeActivateFailed)
 				}
 				return
 			} else {
-				grainCtx.state = grain_running
+				grainCtx.state = grain_activated
 			}
 		}
 
-		if grainCtx.state == grain_running {
+		if grainCtx.state == grain_activated {
 			grainCtx.serveCall(ctx, replyer, req)
 		} else {
 			replyer.redirect(addr.LogicAddr(0))
