@@ -28,10 +28,10 @@ const (
 	logoutResp
 	heartbeatReq
 	heartbeatResp
-	activateReq
-	activateResp
-	deactivateReq
-	deactivateResp
+	placeReq
+	placeResp
+	removeReq
+	removeResp
 	getplacementReq
 	getplacementResp
 	mark_unavaliableReq
@@ -73,21 +73,21 @@ type HeartbeatReq struct {
 type HeartbeatResp struct {
 }
 
-type ActivateReq struct {
+type PlaceReq struct {
 	Addr addr.LogicAddr
 	Pid  string
 }
 
-type ActivateResp struct {
+type PlaceResp struct {
 	Addr addr.LogicAddr
 }
 
-type DeactivateReq struct {
+type RemoveReq struct {
 	Addr addr.LogicAddr
 	Pid  string
 }
 
-type DeactivateResp struct {
+type RemoveResp struct {
 }
 
 type GetPlacementReq struct {
@@ -141,14 +141,14 @@ func (cc *codec) Encode(buffs net.Buffers, o interface{}) (net.Buffers, int) {
 				b = buffer.AppendUint32(b, heartbeatReq)
 			case *HeartbeatResp:
 				b = buffer.AppendUint32(b, heartbeatResp)
-			case *ActivateReq:
-				b = buffer.AppendUint32(b, activateReq)
-			case *ActivateResp:
-				b = buffer.AppendUint32(b, activateResp)
-			case *DeactivateReq:
-				b = buffer.AppendUint32(b, deactivateReq)
-			case *DeactivateResp:
-				b = buffer.AppendUint32(b, deactivateResp)
+			case *PlaceReq:
+				b = buffer.AppendUint32(b, placeReq)
+			case *PlaceResp:
+				b = buffer.AppendUint32(b, placeResp)
+			case *RemoveReq:
+				b = buffer.AppendUint32(b, removeReq)
+			case *RemoveResp:
+				b = buffer.AppendUint32(b, removeResp)
 			case *GetPlacementReq:
 				b = buffer.AppendUint32(b, getplacementReq)
 			case *GetPlacementResp:
@@ -188,14 +188,14 @@ func (cc *codec) Decode(payload []byte) (interface{}, error) {
 		o = &HeartbeatReq{}
 	case heartbeatResp:
 		o = &HeartbeatResp{}
-	case activateReq:
-		o = &ActivateReq{}
-	case activateResp:
-		o = &ActivateResp{}
-	case deactivateReq:
-		o = &DeactivateReq{}
-	case deactivateResp:
-		o = &DeactivateResp{}
+	case placeReq:
+		o = &PlaceReq{}
+	case placeResp:
+		o = &PlaceResp{}
+	case removeReq:
+		o = &RemoveReq{}
+	case removeResp:
+		o = &RemoveResp{}
 	case getplacementReq:
 		o = &GetPlacementReq{}
 	case getplacementResp:
@@ -401,13 +401,13 @@ func (s *placementSvr) Heartbeat(sess *netgo.AsynSocket, msg *Message) {
 	sess.Send(&Message{Seq: msg.Seq, PayLoad: &HeartbeatResp{}})
 }
 
-func (s *placementSvr) Activate(sess *netgo.AsynSocket, msg *Message) {
+func (s *placementSvr) Place(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
-	req := msg.PayLoad.(*ActivateReq)
+	req := msg.PayLoad.(*PlaceReq)
 	if place, ok := s.Placement[req.Pid]; ok && s.getSiloByaddr(place) != nil {
 		if place != req.Addr {
-			sess.Send(&Message{Seq: msg.Seq, PayLoad: &ActivateResp{Addr: place}})
+			sess.Send(&Message{Seq: msg.Seq, PayLoad: &PlaceResp{Addr: place}})
 			return
 		}
 	}
@@ -420,13 +420,13 @@ func (s *placementSvr) Activate(sess *netgo.AsynSocket, msg *Message) {
 		delete(s.tempPlacement, req.Pid)
 	}
 	s.save()
-	sess.Send(&Message{Seq: msg.Seq, PayLoad: &ActivateResp{Addr: req.Addr}})
+	sess.Send(&Message{Seq: msg.Seq, PayLoad: &PlaceResp{Addr: req.Addr}})
 }
 
-func (s *placementSvr) Deactivate(sess *netgo.AsynSocket, msg *Message) {
+func (s *placementSvr) Remove(sess *netgo.AsynSocket, msg *Message) {
 	s.Lock()
 	defer s.Unlock()
-	req := msg.PayLoad.(*DeactivateReq)
+	req := msg.PayLoad.(*RemoveReq)
 	if place, ok := s.Placement[req.Pid]; ok {
 		if place == req.Addr {
 			delete(s.Placement, req.Pid)
@@ -437,7 +437,7 @@ func (s *placementSvr) Deactivate(sess *netgo.AsynSocket, msg *Message) {
 			s.save()
 		}
 	}
-	sess.Send(&Message{Seq: msg.Seq, PayLoad: &DeactivateResp{}})
+	sess.Send(&Message{Seq: msg.Seq, PayLoad: &RemoveResp{}})
 }
 
 func (s *placementSvr) GetPlacement(sess *netgo.AsynSocket, msg *Message) {
@@ -530,10 +530,10 @@ func (svr *placementSvr) Start(service string) error {
 				svr.MarkUnAvaliable(as, packet.(*Message))
 			case *GetPlacementReq:
 				svr.GetPlacement(as, packet.(*Message))
-			case *ActivateReq:
-				svr.Activate(as, packet.(*Message))
-			case *DeactivateReq:
-				svr.Deactivate(as, packet.(*Message))
+			case *PlaceReq:
+				svr.Place(as, packet.(*Message))
+			case *RemoveReq:
+				svr.Remove(as, packet.(*Message))
 			}
 			return nil
 		}).Recv()
@@ -733,9 +733,9 @@ func (cli *placementCli) ResetPlacementCache(pid string, newAddr addr.LogicAddr)
 	}
 }
 
-func (cli *placementCli) Activate(ctx context.Context, pid string) error {
+func (cli *placementCli) Place(ctx context.Context, pid string) error {
 	req := &Message{
-		PayLoad: &ActivateReq{
+		PayLoad: &PlaceReq{
 			Pid:  pid,
 			Addr: cli.selfAddr,
 		},
@@ -746,21 +746,21 @@ func (cli *placementCli) Activate(ctx context.Context, pid string) error {
 		return err
 	}
 
-	if resp.PayLoad.(*ActivateResp).Addr == cli.selfAddr {
+	if resp.PayLoad.(*PlaceResp).Addr == cli.selfAddr {
 		cli.Lock()
 		defer cli.Unlock()
 		cli.localCache[pid] = placementCache{
-			addr: resp.PayLoad.(*ActivateResp).Addr,
+			addr: resp.PayLoad.(*PlaceResp).Addr,
 		}
 		return nil
 	} else {
-		return pd.ErrorRedirect{Addr: resp.PayLoad.(*ActivateResp).Addr}
+		return pd.ErrorRedirect{Addr: resp.PayLoad.(*PlaceResp).Addr}
 	}
 }
 
-func (cli *placementCli) Deactivate(ctx context.Context, pid string) error {
+func (cli *placementCli) Remove(ctx context.Context, pid string) error {
 	req := &Message{
-		PayLoad: &DeactivateReq{
+		PayLoad: &RemoveReq{
 			Pid:  pid,
 			Addr: cli.selfAddr,
 		},

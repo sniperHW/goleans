@@ -49,7 +49,7 @@ func TestPlacement(t *testing.T) {
 		logger.Sugar().Debug(err)
 	} else {
 		logger.Sugar().Debugf("silo addr %s", siloAddr.String())
-		err = cli1.Activate(context.Background(), "sniperHW@User")
+		err = cli1.Place(context.Background(), "sniperHW@User")
 		if err != nil {
 			logger.Sugar().Debug(err)
 		}

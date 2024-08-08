@@ -43,6 +43,9 @@ type PlacementDriver interface {
 
 	ResetPlacementCache(string, addr.LogicAddr)
 
+	/*
+	 * 放置
+	 */
 	Place(context.Context, string) error
 
 	/*
