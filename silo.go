@@ -75,10 +75,12 @@ func (s *Silo) removeGrain(grainCtx *GrainContext) {
 func (s *Silo) Stop() {
 	if s.stoped.CompareAndSwap(false, true) {
 		s.placementDriver.MarkUnAvaliable()
-		//Grain Deactive
 		var wait sync.WaitGroup
 		s.Lock()
-		for _, v := range s.grains {
+		grains := s.grains
+		s.grains = map[string]*GrainContext{}
+		s.Unlock()
+		for _, v := range grains {
 			wait.Add(1)
 			if v.mailbox.Input(func() {
 				v.onSiloStop(wait.Done)
@@ -86,7 +88,6 @@ func (s *Silo) Stop() {
 				wait.Done()
 			}
 		}
-		s.Unlock()
 		wait.Wait()
 		s.placementDriver.Logout(context.TODO())
 	}
