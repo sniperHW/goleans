@@ -2,6 +2,7 @@ package placement
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,6 +117,7 @@ type codec struct {
 	w      int
 	r      int
 	reader buffer.BufferReader
+	writer buffer.BufferWriter
 }
 
 func (cc *codec) Encode(buffs net.Buffers, o interface{}) (net.Buffers, int) {
@@ -126,37 +128,37 @@ func (cc *codec) Encode(buffs net.Buffers, o interface{}) (net.Buffers, int) {
 			return buffs, 0
 		} else {
 			b := make([]byte, 0, 12)
-			b = buffer.AppendUint32(b, uint32(len(buff)+4+4))
-			b = buffer.AppendUint32(b, o.Seq)
+			b = cc.writer.AppendUint32(b, uint32(len(buff)+4+4))
+			b = cc.writer.AppendUint32(b, o.Seq)
 			switch o.PayLoad.(type) {
 			case *LoginReq:
-				b = buffer.AppendUint32(b, loginReq)
+				b = cc.writer.AppendUint32(b, loginReq)
 			case *LoginResp:
-				b = buffer.AppendUint32(b, loginResp)
+				b = cc.writer.AppendUint32(b, loginResp)
 			case *LogoutReq:
-				b = buffer.AppendUint32(b, logoutReq)
+				b = cc.writer.AppendUint32(b, logoutReq)
 			case *LogoutResp:
-				b = buffer.AppendUint32(b, logoutResp)
+				b = cc.writer.AppendUint32(b, logoutResp)
 			case *HeartbeatReq:
-				b = buffer.AppendUint32(b, heartbeatReq)
+				b = cc.writer.AppendUint32(b, heartbeatReq)
 			case *HeartbeatResp:
-				b = buffer.AppendUint32(b, heartbeatResp)
+				b = cc.writer.AppendUint32(b, heartbeatResp)
 			case *PlaceReq:
-				b = buffer.AppendUint32(b, placeReq)
+				b = cc.writer.AppendUint32(b, placeReq)
 			case *PlaceResp:
-				b = buffer.AppendUint32(b, placeResp)
+				b = cc.writer.AppendUint32(b, placeResp)
 			case *RemoveReq:
-				b = buffer.AppendUint32(b, removeReq)
+				b = cc.writer.AppendUint32(b, removeReq)
 			case *RemoveResp:
-				b = buffer.AppendUint32(b, removeResp)
+				b = cc.writer.AppendUint32(b, removeResp)
 			case *GetPlacementReq:
-				b = buffer.AppendUint32(b, getplacementReq)
+				b = cc.writer.AppendUint32(b, getplacementReq)
 			case *GetPlacementResp:
-				b = buffer.AppendUint32(b, getplacementResp)
+				b = cc.writer.AppendUint32(b, getplacementResp)
 			case *MarkUnAvaliableReq:
-				b = buffer.AppendUint32(b, mark_unavaliableReq)
+				b = cc.writer.AppendUint32(b, mark_unavaliableReq)
 			case *MarkUnAvaliableResp:
-				b = buffer.AppendUint32(b, mark_unavaliableResp)
+				b = cc.writer.AppendUint32(b, mark_unavaliableResp)
 			default:
 				log.Println("invaild packet")
 				return buffs, 0
@@ -511,7 +513,9 @@ func (svr *placementSvr) Start(service string) error {
 	_, serve, err := netgo.ListenTCP("tcp", service, func(conn *net.TCPConn) {
 		log.Println("new client")
 		cc := &codec{
-			buff: make([]byte, 65535),
+			buff:   make([]byte, 65536),
+			reader: buffer.NewReader(binary.BigEndian, nil),
+			writer: buffer.NeWriter(binary.BigEndian),
 		}
 		netgo.NewAsynSocket(netgo.NewTcpSocket(conn, cc),
 			netgo.AsynSocketOption{
@@ -635,7 +639,9 @@ func (cli *placementCli) dial() error {
 		return err
 	} else {
 		cc := &codec{
-			buff: make([]byte, 65535),
+			buff:   make([]byte, 65536),
+			reader: buffer.NewReader(binary.BigEndian, nil),
+			writer: buffer.NeWriter(binary.BigEndian),
 		}
 		as := netgo.NewAsynSocket(netgo.NewTcpSocket(conn.(*net.TCPConn), cc),
 			netgo.AsynSocketOption{

@@ -98,6 +98,7 @@ func NewCodec() *CSCodec {
 			Buff:          make([]byte, 4096),
 			MaxPacketSize: MaxPacketSize,
 		},
+		reader: buffer.NewReader(binary.BigEndian, nil),
 	}
 }
 

@@ -2,6 +2,7 @@ package grain
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -35,7 +36,7 @@ type User struct {
 func (u *User) SendToUser(msg *codec.Message) {
 	if u.gateUser != nil {
 		b := u.codecc.Encode(msg)
-		b = buffer.AppendUint64(b, u.gateUser.gateUserID)
+		b = buffer.NeWriter(binary.BigEndian).AppendUint64(b, u.gateUser.gateUserID)
 		clustergo.SendBinMessage(u.gateUser.gateAddr, 100, b, time.Now().Add(time.Second))
 	}
 }
