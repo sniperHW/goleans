@@ -99,7 +99,10 @@ func (m *Mailbox) AfterFunc(d time.Duration, fn func()) *Timer {
 			})
 		} else {
 			if !m.timer.Stop() {
-				<-m.timer.C
+				select {
+				case <-m.timer.C:
+				default:
+				}
 			}
 			m.timer.Reset(d)
 		}
