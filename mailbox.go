@@ -374,6 +374,9 @@ func (m *Mailbox) Await(fn interface{}, args ...interface{}) (ret []interface{})
 func (m *Mailbox) Close(wait bool) {
 	m.mtx.Lock()
 	if !m.closed {
+		if m.timer != nil {
+			m.timer.Stop()
+		}
 		m.closed = true
 		m.taskQueue.broadcast()
 		m.signalAndUnlock()
