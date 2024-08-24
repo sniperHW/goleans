@@ -20,15 +20,13 @@ import (
 var grainList []goleans.GrainCfg = []goleans.GrainCfg{
 	{
 		Type:          "User",
-		NormalBoxCap:  32,
-		UrgentBoxCap:  32,
-		AwaitQueueCap: 23,
+		QueueCap:      32,
+		AwaitQueueCap: 32,
 	},
 	{
 		Type:          "Boss",
-		NormalBoxCap:  32,
-		UrgentBoxCap:  32,
-		AwaitQueueCap: 23,
+		QueueCap:      32,
+		AwaitQueueCap: 32,
 	},
 }
 

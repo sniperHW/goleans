@@ -370,8 +370,6 @@ func (s *placementSvr) Login(sess *netgo.AsynSocket, msg *Message) {
 		s.save()
 	}
 
-	logger.Sugar().Debugf("on login %v seq:%d", req, msg.Seq)
-
 	sess.Send(&Message{Seq: msg.Seq, PayLoad: &LoginResp{}})
 }
 
@@ -511,7 +509,6 @@ func (s *placementSvr) MarkUnAvaliable(sess *netgo.AsynSocket, msg *Message) {
 
 func (svr *placementSvr) Start(service string) error {
 	_, serve, err := netgo.ListenTCP("tcp", service, func(conn *net.TCPConn) {
-		log.Println("new client")
 		cc := &codec{
 			buff:   make([]byte, 65536),
 			reader: buffer.NewReader(binary.BigEndian, nil),
@@ -655,7 +652,7 @@ func (cli *placementCli) dial() error {
 			cli.onResponse(packet.(*Message))
 			return nil
 		}).Recv()
-		logger.Sugar().Debug("connect server ok")
+		logger.Sugar().Debug("placementCli connect server ok")
 		cli.session = as
 		return nil
 	}
@@ -723,7 +720,6 @@ func (cli *placementCli) MarkUnAvaliable() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	cli.call(ctx, req)
-	return
 }
 
 func (cli *placementCli) ResetPlacementCache(pid string, newAddr addr.LogicAddr) {
@@ -784,6 +780,7 @@ func (cli *placementCli) Remove(ctx context.Context, pid string) error {
 }
 
 func (cli *placementCli) GetPlacement(ctx context.Context, pid string) (addr.LogicAddr, error) {
+
 	cli.Lock()
 	defer cli.Unlock()
 	cache, ok := cli.localCache[pid]

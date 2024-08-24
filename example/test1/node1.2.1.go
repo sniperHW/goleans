@@ -35,6 +35,8 @@ func main() {
 	pdClient := placement.NewCli(localaddr, *pdAddr)
 	goleans.Start(discoveryCli, localaddr, pdClient) //不作为silo
 
+	l.Sugar().Debugf("start run")
+
 	go func() {
 		for {
 
